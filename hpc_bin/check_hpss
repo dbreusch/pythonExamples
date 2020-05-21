@@ -1,0 +1,90 @@
+#!/usr/bin/env python
+# iterate through subdirs and show file counts
+# useful for checking results of hpss retrieve jobs
+# run from the GRIB file directory for ERA-I
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, glob, os, commands, sys
+
+nargin = len(sys.argv)
+#pdb.set_trace()
+
+# where is job output stored
+odir="/projects/dbr/erai/hpss_erai"
+
+# the current dir (where the GRIB files are stored by year)
+cdir=os.getcwd()
+
+# get subdir list from args or by ls
+if nargin > 1:
+  dlist = sys.argv[1:]
+else:
+  dlist = commands.getoutput("ls").split('\n')
+for d in dlist:
+  # make sure d is a directory, skip loop if not
+  if not os.path.isdir( d ):
+    continue
+
+  # move into subdir
+  os.chdir( d )
+
+  # find out how many grb files there are
+  sdlist = glob.glob( "*" )
+  nsd = len( sdlist )
+#  nf=commands.getoutput("ls | wc -l")
+
+  # if no files, skip rest of loop
+  if nsd == 0:
+    continue
+
+  # process sub-dirs
+  tot = 0
+  for sd in sdlist:
+    if not os.path.isdir( sd ):
+      continue
+    os.chdir( sd )
+    gr = glob.glob( "*.grb" )
+    tot += len( gr )
+
+    os.chdir( ".." )
+
+  print d+" "+str(nsd)+" subdirs, "+str(tot)+" grb files"
+
+  # --------------------------------------------
+  # process job output directory
+  # --------------------------------------------
+  xdir = odir+"/"+d
+#  pdb.set_trace()
+  if os.path.exists( xdir ):
+    os.chdir( odir+"/"+d )
+  else:
+    print "No output dir for "+d
+    os.chdir( cdir )
+    continue
+
+  # get a list of matching "*.out" files
+  dx = d[:-1]+"?"
+  fpatt="hpss_"+dx+"*.out"
+  gr = glob.glob( fpatt )
+  if len(gr) > 0:
+    for ff in gr:
+      ffs = ff[:-4]
+      cmd="head -n 2 "+ff+" | tail -n 1"
+      r=commands.getoutput( cmd )
+      if "started" in r:
+        p = r.split(' ')
+        ds = ' '.join(p[5:])
+      else:
+        ds = "Unknown start"
+      cmd="tail -n -2 "+ff+" | head -1"
+      r=commands.getoutput( cmd )
+      if "ended" in r:
+        p = r.split(' ')
+        de = ' '.join(p[3:])
+        print ffs+" "+ds+" / "+de
+      else:
+        print ffs+" "+ds+" / exited"
+  else:
+    r=" "
+  os.chdir( cdir )

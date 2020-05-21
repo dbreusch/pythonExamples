@@ -1,0 +1,232 @@
+#!/usr/bin/env python
+# 06/01/18 This script is a MESS and I do NOT understand why it's written
+#          the way it is (with TWO loops on files...).  But I don't have
+#          time to fix/start over.
+# check wrf results:
+# - number of output files
+# - end of wrf_*.out
+# - rsl_save/wrf_rsl.out.0000 (there are normally 192 of these files, so
+#   checking them all may not be practical -- though it could be done)
+
+# 09/26/17, switched to argparse; added CESMLE support
+# 04/04/17, removed hardcoded dependence on home directory name
+# 11/22/15, updated for yellowstone and gismelt
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, glob, os, commands
+import argparse
+
+# -----------------------------------------------------------
+#nargin = len( sys.argv )
+#if nargin < 2:
+#  yearpatt = "*"
+#else:
+#  yearpatt = sys.argv[1]
+#if nargin < 3:
+#  monpatt = "*"
+#else:
+#  monpatt = sys.argv[2]
+# -----------------------------------------------------------
+
+# set up arguments parser
+parser = argparse.ArgumentParser( description = "check on real jobs" )
+parser.add_argument( "-y","--year", help="year to process", nargs="?", default="x" )
+parser.add_argument( "-m","--month", help="month to process (default: all)", nargs="?", default="x" )
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-M","--model", help="model name (default: erai)", nargs="?", default="erai" )
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+yearpatt = args.year
+if yearpatt == "x":
+  yearpatt = '*'
+
+monpatt = args.month
+if monpatt == "x":
+  monpatt = '*'
+
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+
+# -----------------------------------------------------------
+# get home directory
+home = os.path.expanduser("~")
+
+rdir_root=home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wrf/run"
+if ens > 0:
+  rdir_root = rdir_root+"/"+enss
+
+fdir_root=rdir_root
+cdir=os.getcwd()
+#file_patterns = ['wrfout_d01*', 'wrfout_d02*']
+file_patterns = ['wrfout_d01*']
+
+rdirpatt = rdir_root+"/"+yearpatt
+rdirlist = glob.glob( rdirpatt )
+if len(rdirlist)<1:
+  print "1: No files found, check year pattern"
+  print rdirpatt
+  sys.exit()
+if len(rdirlist)>1:
+  rdirlist.sort()
+
+fdirpatt = fdir_root+"/"+yearpatt
+fdirlist = glob.glob( fdirpatt )
+if len(fdirlist)<1:
+  print "2: No files found, check year pattern"
+  print fdirpatt
+  sys.exit()
+if len(fdirlist)>1:
+  fdirlist.sort()
+
+#pdb.set_trace()
+for index in range(len(rdirlist)):
+#  rdirmpatt = rdir_root+"/"+yearpatt+"/????"+monpatt
+  rdirmpatt = rdir_root+"/"+yearpatt
+  rdirmlist = glob.glob( rdirmpatt )
+  if len(rdirmlist)<1:
+    print "3: No files found, check year/month pattern"
+    print rdirmpatt
+    sys.exit()
+  if len(rdirmlist)>1:
+    rdirmlist.sort()
+
+  fdirmpatt = fdir_root+"/"+yearpatt+"/????"+monpatt
+  fdirmlist = glob.glob( fdirmpatt )
+  if len(fdirmlist)<1:
+    print "4: No files found, check year/month pattern"
+    print fdirmpatt
+    sys.exit()
+  if len(fdirmlist)>1:
+    fdirmlist.sort()
+
+  index3 = range(len(fdirmlist));
+  index3_count = 0
+#  pdb.set_trace()
+  for index2 in range(len(fdirmlist)):
+    rl = fdirmlist[index2].split('/')
+    d = rl[-1]
+    d2 = glob.glob( fdir_root+"/"+yearpatt+"/"+d )[0]
+    if d2 not in fdirmlist:
+      print d+" not run yet, skipping"
+      continue
+
+    if not os.path.isdir( fdirmlist[index3[index3_count]] ):
+      index3_count += 1
+      continue
+    os.chdir( fdirmlist[index3[index3_count]] )
+#    pdb.set_trace()
+    nf = 0
+    d01_cnt = len( glob.glob( file_patterns[0] ) )
+#    d02_cnt = len( glob.glob( file_patterns[1] ) )
+#    nf = d01_cnt + d02_cnt
+    nf = d01_cnt
+    if nf > 0:
+      nfs = "%03d" % d01_cnt
+    else:
+      nfs = "---"
+    index3_count += 1
+#
+    os.chdir( fdirmlist[index2] )
+    fpatt = "wrf_c[lw]????????.o*"
+    fcnt = len( glob.glob( fpatt ) )
+    if fcnt > 0:
+  #    fpatt="wrf_*.out"
+      fpatt = "wrf_c[lw]????????.o*"
+  #    gr = glob.glob( fpatt )
+      gr = commands.getoutput( "ls -Rt "+fpatt ).split('\n')
+      if len(gr) > 0:
+  #      if len(gr) > 1:
+  #        gr.sort(reverse=True)
+  #      cmd="tail -n 2 "+gr[0]+" | head -n 1"
+        cmd="tail -n 1 "+gr[0]
+        r=commands.getoutput( cmd )
+        if "Job ended" not in r:
+          if "cannot open" in r:
+            r = "Job queued"
+          else:
+            r = "Job in progress..."
+      else:
+        r=" "
+      cmd = "tail -n 1 rsl_save/wrf_rsl.out.0000"
+  #    cmd = "tail -n 3 rsl_save/wrf_rsl.out.0000 | head -n 1"
+      aa = commands.getoutput( cmd )
+      if "cannot open" in aa:
+        st = " "
+      else:
+        ww = aa.split(' ')
+        if "WRF" in ww[-1]:
+          st = ww[-3]
+        else:
+          pdb.set_trace()
+          st = "Error?"
+  #    print d+" "+nfs+"("+str(d01_cnt)+","+str(d02_cnt)+") "+r+" "+st
+      print d+" "+nfs+" "+r+" "+st
+    else:
+      st = " "
+      if os.path.exists( "rsl.out.0000" ):
+        r = "Job running"
+        print d+" "+nfs+" "+r+" "+st
+      else:
+        cmd = "qstat | grep "+d
+        aa = commands.getoutput( cmd )
+        if len(aa) > 0:
+          r = "Job queued"
+#          pdb.set_trace()
+          print d+" "+nfs+" "+r+" "+st
+        else:
+          for x in [ 'a', 'b', 'c' ]:
+            fpatt = "wrf_c[lw]?????????.o*"
+    #        fpatt="wrf_*"+x+".*.out"
+            gr = commands.getoutput( "ls -Rt "+fpatt ).split('\n')
+            if len(gr) > 0:
+        #      if len(gr) > 1:
+        #        gr.sort(reverse=True)
+              cmd="tail -n 2 "+gr[0]+" | head -n 1"
+        #      cmd="tail -n 1 "+gr[0]
+              r=commands.getoutput( cmd )
+              if "Job ended" not in r:
+                if "cannot open" in r:
+                  r = "Job has not run"
+                else:
+                  r = "Job in progress..."
+            else:
+              r=" "
+            cmd = "tail -n 1 rsl_save_"+x+"/wrf_rsl.out.0000"
+            aa = commands.getoutput( cmd )
+            if "cannot open" in aa:
+              st = " "
+            else:
+              ww = aa.split(' ')
+              if "WRF" in ww[-1]:
+                st = ww[-3]
+              else:
+                pdb.set_trace()
+                st = "Error?"
+            if x == 'a':
+              print x+": "+d+" "+nfs+" "+r+" "+st
+            else:
+              print x+":              "+r+" "+st
+  break

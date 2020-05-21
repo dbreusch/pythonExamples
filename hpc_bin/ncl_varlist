@@ -1,0 +1,119 @@
+#!/usr/bin/env python
+# ncl_varlist:
+# take a ncl_filedump output and create a usable variable catalog from it
+# output file columns:
+#  1 - preferred short name: manually change to preferred name as desired
+#  2 - short name: for reference
+#  3 - long name: as the var exists in the source file
+#  4+ - var description
+# Note that the short and long names are the same for WRF but
+# different for ERA datasets.
+
+import pdb, sys, os, commands
+
+nargin = len(sys.argv)
+if nargin < 2:
+  print "Syntax: ncl_varlist ifn [ofn]"
+  print "  ifn = input file name"
+  print "  ofn = output file name, defaults to ifn.out"
+  sys.exit()
+
+ifn = sys.argv[1]
+if nargin < 3:
+  ofn = ifn+".out"
+else:
+  ofn = sys.argv[2]
+print "Output in "+ofn
+
+ifile = open( ifn, "r" )
+data = ifile.readlines()
+ifile.close()
+
+ofile = open( ofn, "w" )
+invar = 0
+global_ds = 0
+nlev = ""
+longname = ""
+#global_patt = "%-7s%-7s%-15s"
+global_patt = "%-15s%-15s%-15s"
+regional_patt = "%-20s%-20s%-20s"
+
+for index in range(len(data)):
+#  if index < 12:
+#    continue
+#  if "variables:" in data[index]:
+#    continue
+
+  args = data[index].split()
+  if len(args) == 0:
+    continue
+
+  # ERA-Interim
+  if "g4_lat_" in args[0]:
+    nlat = args[2]
+    global_ds = 1
+    continue
+  if "g4_lon_" in args[0]:
+    nlon = args[2]
+    global_ds = 1
+    continue
+  if "lv_ISBL" in args[0]:
+    nlev = args[2]
+    global_ds = 1
+    continue
+
+  # PWRF
+  if ("west_east" in args[0]) and (not args[0].endswith("stag")):
+    nlat = args[2]
+    global_ds = 0
+    continue
+  if ("south_north" in args[0]) and (not args[0].endswith("stag")):
+    nlon = args[2]
+    global_ds = 0
+    continue
+  if ("bottom_top" in args[0]) and (not args[0].endswith("stag")):
+    nlev = args[2]
+    global_ds = 0
+    continue
+
+  if ("float" in args[0]) or ("integer" in args[0]) or ("character" in args[0]):
+#    pdb.set_trace()
+    if invar == 1:
+      # print short name twice to support changing default value later
+      if global_ds == 1:
+        opatt = global_patt
+      else:
+        opatt = regional_patt
+      s = opatt % (sname, sname, varname)
+      ofile.write( s+" " )
+      if len(longname) > 0:
+        for nn in longname:
+          ofile.write( nn+" " )
+      ofile.write( "\n" )
+#      print varname
+      invar = 0
+
+    varname = args[1]
+    if global_ds == 1:
+      p = varname.split('_')
+      if (not "lat" in varname) and (not "lon" in varname):
+        sname = p[0]
+      else:
+        sname = p[1]
+    else:
+      sname = varname
+
+    invar = 1
+    continue
+
+  if ("description" in args[0]) or ("long_name" in args[0]):
+    longname = args[2:]
+    continue
+
+ofile.close()
+if global_ds == 1:
+  print nlat+" Lat x "+nlon+" Lon"
+else:
+  print nlat+" West-East x "+nlon+" South-North"
+if len(nlev)>0:
+  print nlev+" Levels"

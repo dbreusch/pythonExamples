@@ -1,0 +1,128 @@
+#!/usr/bin/env python
+# use NCO/CDO to add time to ERA files
+# Original input file will be REPLACED unless arg outdir is specified!
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, commands
+import numpy, Nio
+import tempfile
+
+nargin = len(sys.argv)
+if nargin < 9:
+  print "Usage: add_time_global file_type diryy dirmm dirdd fileyy filemm filedd filemm [indir] [outdir]"
+  print "  file_type = sfc | ua | uv | fc"
+  print"               used to define file pattern"
+  print "  diryy, dirmm, dirdd = year, month, day of input/output dir"
+  print "  fileyy, filemm, filedd, file hh = year, month, day, hour of input/output file"
+  print "  indir = source directory for input files [defaults to erai sub_spatial dir]"
+  print "          names are relative to /lustre/janus_scratch/dbr/data/erai unless"
+  print "          they start with a /"
+  print "  outdir = directory for output files [defaults to same as input]"
+  print "          same naming standard as indir"
+  sys.exit()
+
+# get file type
+file_type = sys.argv[1]
+
+# get directory date info
+diryy, dirmm, dirdd = map(int, sys.argv[2:5])
+
+# get file date info
+fileyy, filemm, filedd, filehh = map(int, sys.argv[5:9])
+
+# base directory names
+#root_dir = "/lustre/janus_scratch/dbr/data/erai"
+root_dir = "/glade/u/home/dbr/scratch/data/erai/historical"
+if nargin < 10:
+#  in_dir = root_dir+"/grb"
+  in_dir = root_dir+"/hist_orig"
+else:
+  arg_dir = sys.argv[9]
+  if arg_dir.startswith('/'):
+    in_dir = arg_dir
+  else:
+    in_dir = root_dir+"/"+arg_dir
+
+if nargin < 11:
+#  out_dir = in_dir
+  out_dir = "/glade/u/home/dbr/scratch/data/erai"
+else:
+  arg_dir = sys.argv[10]
+  if arg_dir.startswith('/'):
+    out_dir = arg_dir
+  else:
+    out_dir = root_dir+"/"+arg_dir
+#out_dir = root_dir+"/sub_var"
+#out_dir = "/lustre/janus_scratch/dbr/tmp"
+#print out_dir
+
+# set up directory/file patterns and pieces
+dir1patt = "%4d"
+#dir2patt = "%4d%02d%02d"
+dir2patt = "%4d%02d"
+if "sfc" in file_type:
+#  filepatt = "ei.oper.an.sfc.regn128sc.%04d%02d%02d%02d"
+  filepatt = "tas.ei.oper.an.sfc.regn128sc.%04d%02d%02d%02d"
+elif "ua" in file_type:
+  filepatt = "ei.oper.an.pl.regn128sc.%04d%02d%02d%02d"
+elif "uv" in file_type:
+  filepatt = "ei.oper.an.pl.regn128uv.%04d%02d%02d%02d"
+elif "fc" in file_type:  # CHECK FILE PATTERN!!!
+  filepatt = "ei.oper.fc.sfc.regn128sc.%04d%02d%02d%02d"
+
+dir1 = dir1patt % diryy
+#dir2 = dir2patt % (diryy, dirmm, dirdd)
+dir2 = dir2patt % (diryy, dirmm)
+fn   = filepatt % (fileyy, filemm, filedd, filehh)
+
+#pdb.set_trace()
+xfn = in_dir+"/"+dir1+"/"+dir2+"/"+fn
+ncl_cvt = 0
+if not os.path.exists( xfn+".nc" ):
+  if not os.path.exists( xfn+".grb" ):
+    print "Input file not found with either .nc or .grb extension"
+    sys.exit()
+  else:
+    ifn = xfn+".grb"
+    ncl_dir = "/lustre/janus_scratch/dbr/tmp"
+    ncl_cmd = "ncl_convert2nc "+ifn+" -o "+ncl_dir
+    os.system( ncl_cmd )
+    ifn = ncl_dir+"/"+fn+".nc"
+    ncl_cvt = 1
+else:
+  ifn = xfn+".nc"
+
+odir = out_dir+"/"+dir1+"/"+dir2
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+dir2
+
+xfn = odir+"/"+fn
+tmpfileobj = tempfile.NamedTemporaryFile(delete=False)
+#tempofn1 = xfn+"_tmp.nc"
+#pdb.set_trace()
+tempofn1 = tmpfileobj.name
+ofn = xfn+".nc"
+
+# open input file and get var info
+ncfile = Nio.open_file( ifn, "r" )
+ncvars = ncfile.variables
+
+if "time" in ncvars:
+  print "File already has time dimension"
+  sys.exit()
+
+# add time dimension and variable
+cmd = "ncecat -O "+ifn+" "+tempofn1
+os.system( cmd )
+cmd = "ncrename -O -d record,time "+tempofn1
+os.system( cmd )
+cmd = "cdo -s settunits,hours -setreftime,1800-01-01,0:00 -settaxis,"+str(fileyy)+"-"+str(filemm)+"-"+str(filedd)+","+str(filehh)+":00:00,6h "+tempofn1+" "+ofn
+os.system( cmd )
+
+# finish up
+if os.path.exists( tempofn1 ):
+  os.unlink( tempofn1 )

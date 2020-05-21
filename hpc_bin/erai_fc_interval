@@ -1,0 +1,106 @@
+#!/usr/bin/env python
+# erai_fc_interval:
+# use NCO to adjust accumulated vars in NCL-created forecast files
+# to uniform 6-hourly interval.  this turns 12h periods to 6h periods
+# (i.e., every other time step).
+# output to dir fc_interval
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, commands, random
+
+nargin = len(sys.argv)
+if nargin < 4:
+  print "Usage: erai_fc_interval yy mm varname [in_dir]"
+  print " Adjust accumulated vars to uniform time interval in forecast files"
+  print " Adds var with suffix '_6h'"
+  print "  yy = year of input file"
+  print "  mm = month of input file"
+  print "  varname = which forecast var (e.g., slhf_147)"
+  print "  in_dir = source directory for input files [defaults to erai fc_monthly dir]"
+  print "          names are relative to /lustre/janus_scratch/dbr/data/erai unless"
+  print "          they start with a /"
+  sys.exit()
+
+# get year, month info
+year, mon = map(int, sys.argv[1:3] )
+
+# get varname info
+varname = sys.argv[3]
+shortname = varname[:-1]
+
+# dictionary of long_name metadata
+long_names = { 'hflsa' : 'Surface latent heat flux',
+               'hfssa' : 'Surface sensible heat flux',
+               'rsdsa' : 'Surface solar radiation downwards',
+               'rsusa' : 'Surface solar radiation upwards',
+               'rsnsa' : 'Surface solar radiation net',
+               'rldsa' : 'Surface thermal radiation downwards',
+               'rlusa' : 'Surface thermal radiation upwards',
+               'rlnsa' : 'Surface thermal radiation net' }
+
+# base directory names
+root_dir = "/lustre/janus_scratch/dbr/data/erai"
+if nargin < 5:
+  in_dir = root_dir+"/fc_monthly"
+else:
+  arg_dir = sys.argv[4]
+  if arg_dir.startswith('/'):
+    in_dir = arg_dir
+  else:
+    in_dir = root_dir+"/"+arg_dir
+
+out_dir = root_dir+"/fc_interval"
+tmp_dir = "/lustre/janus_scratch/dbr/tmp"
+
+# set up file pattern and create filename
+filepatt = "ei.oper.fc.sfc.regn128sc.%s.%04d%02d"
+fn   = filepatt % (varname, year, mon)
+
+# set up directory pattern and dirname
+dirpatt1 = "%4d"
+dir1 = dirpatt1 % year
+dirpatt2 = "%4d%02d"
+dir2 = dirpatt2 % (year, mon)
+
+# create full path filename for input file
+ifn = in_dir+"/"+dir1+"/"+dir2+"/"+fn+".nc"
+
+if not os.path.exists( ifn ):
+  print "Input file not found"
+  print ifn
+  sys.exit()
+
+odir = out_dir+"/"+dir1+"/"+dir2
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+dir1
+ofn = odir+"/"+fn+".nc"
+print os.path.basename( ofn )
+
+#pdb.set_trace()
+# create temp file for ncap2 script
+xfn = tmp_dir+"/ncap_"
+scr_fn = xfn+str(os.getpid())+str(random.randint( 101, 999 ))+".nco"
+sfile = open( scr_fn, "w" )
+sfile.write(varname+'_6h = '+varname+';\n' )
+sfile.write(varname+'_6h(1::2,:,:) = '+varname+'_6h(1::2,:,:)-'+varname+'_6h(0::2,:,:);\n' )
+sfile.write(varname+'_6h@long_name = "'+long_names[varname]+' (accum, 6h)";\n')
+#sfile.write(shortname+' = float( '+varname+'_6h / 21600. );\n' )
+#sfile.write(shortname+'@long_name = "'+long_names[varname]+' (average, 6h)";\n')
+#sfile.write(shortname+'@units = "W m**-2";\n')
+sfile.close()
+
+# run the ncap2 script
+cmd = "ncap2 -O -S "+scr_fn+" "+ifn+" "+ofn
+os.system( cmd )
+
+# add history to reflect processing
+cmd = "ncatted -O -a history,global,a,c,'Processing with erai_fc_interval complete\n' "+ofn
+os.system( cmd )
+
+# clean up temp file
+if os.path.exists( scr_fn ):
+  os.unlink( scr_fn )

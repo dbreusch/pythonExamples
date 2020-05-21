@@ -1,0 +1,88 @@
+#!/usr/bin/env python
+# archive_metgrid
+# archive WPS metgrid files
+# 1/28/16 copied from new archive_intermed, adjusted for metgrid
+
+import pdb, argparse, glob, os, tempfile
+
+# set up argument parser
+parser = argparse.ArgumentParser( description = "Archive WPS metgrid files" )
+
+# define arguments
+parser.add_argument( "yyyymm", help="year, month to archive" )
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-v","--verbose", help="provide some debug output", action="store_true")
+parser.add_argument( "-d","--debug", help="enable pdb", action="store_true")
+
+# parse the command line
+args = parser.parse_args()
+# assign args to variables
+debug = args.debug
+if debug:
+  pdb.set_trace()
+yyyymm = args.yyyymm
+yyyy = yyyymm[0:4]
+mm = yyyymm[4:]
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Model "+branch+" not recognized"
+  sys.exit()
+verbose = args.verbose
+
+# define input directory
+# /glade/u/home/dbr/scratch/wrf/gis_cesmlw/1pt5degC/wps/metgrid/011/wps/metgrid
+base_glade = "/glade/u/home/dbr/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wps/metgrid"
+base_hpss = "metgrid/"+expname+"_"+model+"/"+branch
+if ens > 0:
+  base_glade += "/"+enss
+  base_hpss += "/"+enss
+
+idir = base_glade+"/"+yyyy
+odir = base_hpss+"/"+yyyy
+ofile = yyyy+"_"+mm+".tar"
+
+print "Base glade = "+base_glade
+print "Base hpss = "+base_hpss
+print "Input dir = "+idir
+print "Output dir = "+odir
+
+if os.path.exists( idir ):
+  os.chdir( idir )
+  tarInFile = tempfile.NamedTemporaryFile( delete=False )
+  tarIfn = tarInFile.name
+
+  dlist = sorted( glob.glob( yyyymm+"*" ) )
+  if len( dlist ) > 0:
+    for d in dlist:
+      tarInFile.write( yyyy+'/'+d+'\n' )
+    tarInFile.close()
+    #print("tar input file:")
+    #os.system( 'cat '+tarIfn )
+
+#    pdb.set_trace()
+    print("Running htar command")
+    os.chdir( ".." )
+    cmd = "htar -cvP -f "+odir+"/"+ofile+" -L "+tarIfn
+    os.system( cmd )
+
+    os.unlink( tarIfn )
+  else:
+    print "Empty sub-directory list"
+else:
+  print "Input path not found"

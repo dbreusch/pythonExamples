@@ -1,0 +1,205 @@
+#!/usr/bin/env python
+# Convert CESM model data to files for specific month, time period.
+# - Adjust sub-daily/daily into daily files.
+# - Select for month, time period.
+# - Rename vars to cmip5 standard.
+
+import pdb, sys, os, commands
+import argparse, uuid
+
+# set up arguments
+parser = argparse.ArgumentParser( description = "Convert CESM data to specific month and time period" )
+parser.add_argument( "var", help="variable to process" )
+parser.add_argument( "varfreq", help="variable time frequency" )
+parser.add_argument( "ens", help="ensemble member to process", type=int )
+parser.add_argument( "-M","--month", help="month to select (numeric)" , type=int, nargs="?", default=-1 )
+parser.add_argument( "-m","--model", help="model name (default: cesmlw)", nargs="?", default="cesmlw" )
+parser.add_argument( "-y","--outyears", help="output year (default: full period)", nargs="?", default="x" )
+
+# parse the command line
+args = parser.parse_args()
+
+# get variable name to process
+var = args.var
+
+# CESM -> CMIP variable names
+vardict = { 'TREFHT': 'tas', 'TREFHTMX': 'tasmax', 'TS': 'ts' }
+try:
+  varnew = vardict[ var ]
+except KeyError:
+  varnew = var.lower()
+
+# get variable archival frequency
+varfreq = args.varfreq
+origfreq = varfreq      # save var frequency
+outfreq = varfreq[0:3]  # output frequency: "day" or "mon"
+
+# get month, if any, to select
+mon = args.month
+mons = "%02d" % mon # zero-padded string version
+
+# get ensemble member being processed
+ens = args.ens
+enss = "%03d" % ens # zero-padded string version
+
+# get model name
+model = args.model
+
+# get output period years
+outyears = args.outyears
+
+# translate var frequency to filename equivalent
+# this is one of the main bottlenecks for dynamic code
+freqdict = {'mon': 'h0', 'daysfc': 'h1', 'dayua': 'h2', '6hr': 'h3', '3hr': 'h4'}
+filetype = freqdict[ varfreq ]
+
+# adjust capitalization of model name
+modeluc = commands.getoutput( 'gcm_to_uc '+model )
+
+# try to get period from current directory path
+cdir = os.getcwd()
+dirlvls = cdir.split('/')
+try:
+  idx = dirlvls.index( model )
+  period = dirlvls[idx+1]     # period is node after model name
+except ValueError:
+  print "Model name "+model+" not found in current directory path"
+  sys.exit()
+print "Model is "+model+", ensemble member "+enss+", period "+period
+infix = modeluc+"_"+enss+"_"+period
+
+if model == "cesmle":   # processing just for CESM LE
+  if period == "historical":
+    y1 = "1981"
+    y2 = "2000"
+    if var == "ps":
+      y1 = "1991"
+    fperiod = "B20TRC5CNBDRD"
+  else:
+    y1 = "2081"
+    y2 = "2100"
+    if var == "ps":
+      y1 = "2091"
+    fperiod = "BRCP85C5CNBDRD"
+  print "Time period: "+y1+" "+y2
+  ifn = "b.e11.%s.f09_g16.%s.cam.%s.%s.%s0101-%s1231.nc" % ( fperiod, enss, filetype, var, y1, y2 )
+
+if model == "cesmlw":   # processing just for CESM LW
+  if period == "historical":
+    print 'Period "'+period+'" not applicable for this model'
+    sys.exit()
+  else:
+    fperiod = "BRCP26C5CNBDRD"
+    fperiod2 = "1pt5degC"
+    if outfreq == "day":
+      y1 = "2006"
+      if ens in ( 6, 7 ):
+        y1 = "2011"
+      if ens in ( 9, 10 ):
+        y1 = "2026"
+      y2 = "2100"
+      ifn = "b.e11.%s.f09_g16.%s.%s.cam.%s.%s.%s0101-%s1231.nc" % ( fperiod, fperiod2, enss, filetype, var, y1, y2 )
+    if outfreq == "mon":
+      y1 = "2006"
+      y2 = "2100"
+      ifn = "b.e11.%s.f09_g16.%s.%s.cam.%s.%s.%s01-%s12.nc" % ( fperiod, fperiod2, enss, filetype, var, y1, y2 )
+  print "Time period: "+y1+" "+y2
+  if not os.path.exists( ifn ):
+    print ifn
+    print "Input file not found, check command line args"
+    os.sys.exit()
+
+# define output file name
+if outyears == "x":     # use default
+  y1o = y1
+  y2o = y2
+else:
+  ( y1o, y2o ) = outyears.split('-')
+
+if mon > 1:
+  ofn = "%s_%s_%s_%s-%s_%s.nc" % ( varnew, outfreq, infix, y1o, y2o, mons )
+else:
+  ofn = "%s_%s_%s_%s-%s.nc" % ( varnew, outfreq, infix, y1o, y2o )
+
+# define output file directory
+# check first whether we're in hist_orig or a subdir of it (e.g, "h0")
+try:
+  idx = dirlvls.index( filetype )
+  odir = "../../hist_adj/"+filetype   # in a subdir
+except ValueError:
+  odir = "../hist_adj"                # in hist_orig
+if not os.path.exists( odir ):
+  os.makedirs( odir )
+
+print ifn
+print "  "+ofn
+
+# ---------------------------------------------------------------------
+# In older versions (shell script for CMIP5 files), I had code to merge
+# files from different time periods to cover the desired time period,
+# e.g., 1981-2000:
+# 1) ncrcat to merge the files
+# 2) cdo seldate to extract the desired output period
+# Subsequent notes indicate this is NOT necessary with CESM LE and the
+# files for CESM LW appear to not need this processing either.
+# If I ever modify this for CMIP5, I'll need to add this code.
+#   07/27/17 
+# ---------------------------------------------------------------------
+
+# select a year range?
+tmp1 = "tmp_"+uuid.uuid4().hex+".nc"
+if outyears == "x":     # use default
+  cmd = "cp "+ifn+" "+tmp1
+else:
+  cmd = "cdo -s seldate,"+y1o+"-01-01:00:00:00,"+y2o+"-12-31:23:59:00 "+ifn+" "+tmp1
+os.system( cmd )
+
+# select a month?
+tmp2 = "tmp_"+uuid.uuid4().hex+".nc"
+if mon > 0:
+  cmd = "cdo -s selmon,"+str(mon)+" "+tmp1+" "+tmp2
+else:   # no, copy the original to the temp file instead
+  cmd = "cp "+tmp1+" "+tmp2
+os.system( cmd )
+#pdb.set_trace()
+
+# default "time shift", may change if averaging is done
+tshift = 0
+
+# average 6hr files
+if varfreq == "6hr":
+  tmp3 = "tmp_"+uuid.uuid4().hex+".nc"
+  cmd = "mv "+tmp2+" "+tmp3
+  os.system( cmd )
+  cmd = "cdo -s daymean "+tmp3+" "+tmp2
+  varfreq = "day"
+  tshift = -18
+  os.unlink( tmp3 )
+
+# average 3hr files
+if varfreq == "3hr":
+  tmp3 = "tmp_"+uuid.uuid4().hex+".nc"
+  cmd = "mv "+tmp2+" "+tmp3
+  os.system( cmd )
+  cmd = "cdo -s daymean "+tmp3+" "+tmp2
+  varfreq = "day"
+  tshift = -21
+  os.unlink( tmp3 )
+
+# time shift the file?
+if tshift < 0:
+  cmd = "cdo -s shifttime,"+str(tshift)+"h "+tmp2+" "+odir+"/"+ofn
+  os.system( cmd )
+  os.unlink( tmp2 )
+else: # no, just move it to the output file name
+  cmd = "mv "+tmp2+" "+odir+"/"+ofn
+  os.system( cmd )
+
+# rename to CMIP standards
+cmd = "ncrename -v "+var+","+varnew+" "+odir+"/"+ofn
+print cmd
+os.system( cmd )
+
+# cleanup
+if os.path.exists( tmp1 ):
+  os.unlink( tmp1 )

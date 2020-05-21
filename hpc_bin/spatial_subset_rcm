@@ -1,0 +1,159 @@
+#!/usr/bin/env python
+# use NCO to create spatial subset from RCM (i.e., WRF) file
+# points outside desired region -> FillValue and are NOT actually removed
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, commands
+
+nargin = len(sys.argv)
+if nargin < 9:
+  print "Usage: spatial_subset_rcm varlist_file region diryy dirmm dirdd fileyy filemm filedd filemm"
+  print "  varlist_file = file (created by ncl_varlist) of vars to process"
+  print "  region = minlat,maxlat,minlon,maxlon"
+  print "  diryy, dirmm, dirdd = year, month, day of input/output dir"
+  print "  fileyy, filemm, filedd, file hh = year, month, day, hour of input/output file"
+  sys.exit()
+
+# get vars-to-process list
+varlist_file = sys.argv[1]
+
+# get region boundaries
+minlat, maxlat, minlon, maxlon = sys.argv[2].split(',')
+
+# get directory date info
+diryy, dirmm, dirdd = map(int, sys.argv[3:6])
+
+# get file date info
+fileyy, filemm, filedd, filehh = map(int, sys.argv[6:10])
+
+# base directory names
+root_dir = "/lustre/janus_scratch/dbr/wrf"
+#in_dir = root_dir+"/sub_var"
+in_dir = root_dir+"/run"
+out_dir = root_dir+"/sub_spatial"
+
+# set up directory/file patterns and pieces
+dir1patt = "%4d"
+dir2patt = "%4d%02d%02d"
+filepatt = "wrfout_d02_%4d-%02d-%02d_%02d:00:00"
+lonvar = "XLONG"
+latvar = "XLAT"
+fillval = "-9999."
+
+dir1 = dir1patt % diryy
+dir2 = dir2patt % (diryy, dirmm, dirdd)
+fn   = filepatt % (fileyy, filemm, filedd, filehh)
+
+ifn = in_dir+"/"+dir1+"/"+dir2+"/"+fn
+odir = out_dir+"/"+dir1+"/"+dir2
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+dir2
+
+ofn = odir+"/"+fn
+scriptfn = ofn+"_sh"
+ncapfn = ofn+"_ncap"
+tempfn = ofn+"_temp"
+
+# define variables of interest
+ifile = open( varlist_file, "r" )
+varlist = ifile.readlines()
+ifile.close()
+
+# build list of vars to subset
+allvarslist = []
+for ln in varlist:
+  files = ln.split()
+  custname = files[0]
+  if custname.startswith("#"):
+    continue
+  allvarslist.append( custname )
+
+# use ncap2 to mask vars spatially by adding new *_msk vars
+ofile = open( scriptfn, "w" )
+ofile.write( "cat > "+ncapfn+" << EOF\n" )
+ofile.write( "where ("+lonvar+" < 0) "+lonvar+" = "+lonvar+" + 360;\n" )
+ofile.write( "*llmask = ("+latvar+" >= "+minlat+" && "+latvar+" <= "+maxlat+") && ("+lonvar+" >= "+minlon+" && "+lonvar+" <= "+maxlon+");\n" )
+for v in allvarslist:
+  if v.startswith("Times"):
+    continue
+  if v.startswith("ZN"):
+    continue
+  ofile.write( v+"_msk = "+v+"*llmask;\n" )
+  ofile.write( "where (!llmask) "+v+"_msk = "+fillval+";\n" )
+ofile.write( "EOF\n" )
+ofile.write( "ncap2 -O -S "+ncapfn+" "+ifn+" "+ofn+"\n" )
+ofile.write( "rm "+ncapfn+"\n" )
+ofile.close()
+
+# run the ncap2 commands
+cmd = "sh "+scriptfn
+os.system( cmd )
+
+# copy just the masked vars to a new file
+nco_cmd = "ncks -h -O -v "
+for v in allvarslist:
+  if v.startswith("Times"):
+    nco_cmd = nco_cmd+v
+  elif v.startswith("ZN"):
+    nco_cmd = nco_cmd+v
+  else:
+    nco_cmd = nco_cmd+v+"_msk"
+  if not v == allvarslist[-1]:
+    nco_cmd = nco_cmd+","
+nco_cmd = nco_cmd+" "+ofn+" "+tempfn
+os.system( nco_cmd )
+
+# rename mask vars
+nco_cmd = "ncrename -h -O "
+for v in allvarslist:
+  if v.startswith("Times"):
+    continue
+  elif v.startswith("ZN"):
+    continue
+  else:
+    nco_cmd = nco_cmd+"-v "+v+"_msk,"+v
+  if not v == allvarslist[-1]:
+    nco_cmd = nco_cmd+" "
+nco_cmd = nco_cmd+" "+tempfn
+os.system( nco_cmd )
+
+# add FillValue to masked vars
+#pdb.set_trace()
+for v in allvarslist:
+  nco_cmd = "ncatted -h -O "
+  if v.startswith("Times"):
+    continue
+  elif v.startswith("ZN"):
+    continue
+  else:
+    nco_cmd = nco_cmd+"-a _FillValue,"+v+",o,f,"+fillval+" "+tempfn
+  os.system( nco_cmd )
+
+os.system("mv "+tempfn+" "+ofn)
+
+# add global attributes for subset range
+cmd = "ncatted -O -a minlat,global,o,f,"+minlat+" "+ofn
+os.system( cmd )
+
+# add global attributes for subset range
+cmd = "ncatted -O -a maxlat,global,o,f,"+maxlat+" "+ofn
+os.system( cmd )
+
+# add global attributes for subset range
+cmd = "ncatted -O -a minlon,global,o,f,"+minlon+" "+ofn
+os.system( cmd )
+
+# add global attributes for subset range
+cmd = "ncatted -O -a maxlon,global,o,f,"+maxlon+" "+ofn
+os.system( cmd )
+
+# add history to reflect subset processing
+cmd = "ncatted -O -a history,global,a,c,'Processing with spatial_subset_rcm complete\n' "+ofn
+os.system( cmd )
+
+# cleanup
+os.unlink( scriptfn )

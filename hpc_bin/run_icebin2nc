@@ -1,0 +1,50 @@
+#!/usr/bin/env python
+# run_icebin2nc
+# wrapper script to run the script icebin2nc.ncl
+
+import pdb, sys, os, commands
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Syntax:  run_icebin2nc file_list hemisphere"
+  print "  file_list = list of files to process"
+  print "  hemisphere = sh | nh"
+  sys.exit()
+
+# get command line args
+file_list_fn = sys.argv[1]
+hem = sys.argv[2]
+
+# read in complete list of files to process
+ifile = open( file_list_fn, "r" )
+file_list = ifile.readlines()
+ifile.close()
+
+# get year from name of first file
+yr = file_list[0][3:7]
+print "Year: "+yr
+
+# define key vars
+idir = "/glade/u/home/dbr/user/data/seaice/bin_"+hem+"/"+yr
+odir = "/glade/u/home/dbr/user/data/seaice/nc_"+hem+"/"+yr
+ncl_cmd = "/glade/u/home/dbr/user/data/seaice/icebin2nc.ncl"
+
+# check dirs
+if not os.path.exists( idir ):
+  print "Input directory "+idir+" does not exist"
+  sys.exit()
+
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+odir
+
+# process the files
+for f in file_list:
+  f = f.rstrip()
+  g = f.split('.')[0]
+  print g
+  cmd = "ncl 'ifn=\""+g+"\"' 'yr=\""+yr+"\"' 'hem=\""+hem+"\"' "+ncl_cmd
+#  print cmd
+  os.system( cmd )

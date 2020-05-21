@@ -1,0 +1,137 @@
+#!/usr/bin/env python
+# make_wrf_postproc:
+# create SLURM job to run WRF postprocessing script
+
+# 5/29/18, changed maxproc (#tasks) to argument
+# 12/7/8/15, converted to argparse
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, commands
+import argparse
+
+# set up arguments parser
+parser = argparse.ArgumentParser( description = "create WRF postprocessing job" )
+parser.add_argument( "fnlist", help="file of wrfout files to be processed", nargs=1 )
+parser.add_argument( "-j","--jnum", help="starting number suffix for SLURM jobs (defaults to 1)", nargs="?", type=int, default="1" )
+parser.add_argument( "-s","--script", help="name of script to run on each file (defaults to wrf_postproc)", nargs="?", default="wrf_postproc" )
+parser.add_argument( "-p","--prefix", help="prefix for SLURM batch file name/job name (default postproc)", nargs="?", default="postproc" )
+parser.add_argument( "-S","--submit", help="automatically submit batch job (default n)", action="store_true" )
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-v","--verbose", help="provide some debug output", action="store_true")
+parser.add_argument( "-d","--debug", help="enable pdb", action="store_true")
+parser.add_argument( "-M","--month", help="month to process (default: 7)", nargs="?", default="7" )
+parser.add_argument( "-T","--tasks", help="maximum number of concurrent tasks (default: 12)", type=int, nargs="?", default="12" )
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+debug = args.debug
+if debug:
+  pdb.set_trace()
+
+fnlist = args.fnlist[0]
+jnum = '%03d' % args.jnum
+script_cmd = args.script
+prefix = args.prefix
+submit = args.submit
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+verbose = args.verbose
+mm = args.month
+maxproc = args.tasks
+if maxproc > 40:
+  maxproc = 40  # absolute ceiling
+
+if verbose:
+  print "fnlist="+fnlist
+  print "jnum="+str(jnum)
+  print "Script="+script_cmd
+  print "Prefix="+prefix
+  if submit:
+    print "To be submitted"
+  else:
+    print "No submit"
+  print "Ensemble="+enss
+  print "Experiment="+expname
+  print "Branch="+branch
+  print "Model="+model.upper()
+
+# some hardcoded vars
+ndays = 1
+acctnum = "UNMT0001"
+queue = "casper"
+wc_time = "06:00:00"
+
+jname = prefix
+
+wrf_home_dir = "/glade/u/home/dbr/wrf/"+expname+"_"+model+"/src"
+cust_dir = wrf_home_dir+"/custom"
+
+# create slurm job filenames
+slurm_root = "%s_%s" % (jname, jnum)
+slurm_fn_pro = slurm_root+"_pro"
+slurm_fn_cmds = slurm_root+"_mid"
+slurm_fn_epi = slurm_root+"_epi"
+fn_job = slurm_root
+
+# create (edit) slurm_prolog
+cmd = "sed -e 's/ACCT/"+acctnum+"/' -e 's/BASE_DATESTR/"+fn_job+"/g' -e 's/CLOCK/"+wc_time+"/' -e 's/QUEUE/"+queue+"/' < "+cust_dir+"/slurm_prolog > "+slurm_fn_pro
+os.system( cmd )
+
+# create (copy) slurm_epilog
+cmd = "cp "+cust_dir+"/slurm_epilog "+slurm_fn_epi
+os.system( cmd )
+
+# create the middle part
+ofile = open( slurm_fn_cmds, "w" )
+#pdb.set_trace()
+#ofile.write( "module load python\n" )
+ofile.write( "module load ncl\n" )
+ofile.write( "\n" )
+ofile.write( "run_wrf_postproc " )
+ofile.write( fnlist+" " )
+ofile.write( "-s "+script_cmd+" " )
+ofile.write( "-E "+str(ens)+" " )
+ofile.write( "-e "+expname+" " )
+ofile.write( "-m "+model+" " )
+ofile.write( "-b "+branch+" " )
+ofile.write( "-M "+mm+" " )
+ofile.write( "-T "+str(maxproc)+"\n" )
+
+#ofile.write( "wait\n" )
+ofile.close()
+
+# put pieces together
+cmd = "cat "+slurm_fn_pro+" "+slurm_fn_cmds+" "+slurm_fn_epi+" > "+fn_job
+os.system( cmd )
+print "SLURM job in file "+fn_job
+if submit == "y":
+  cmd = "bsub < "+fn_job
+  os.system( cmd )
+
+# clean up
+if os.path.exists( slurm_fn_pro):
+  os.unlink( slurm_fn_pro )
+if os.path.exists( slurm_fn_cmds):
+  os.unlink( slurm_fn_cmds )
+if os.path.exists( slurm_fn_epi):
+  os.unlink( slurm_fn_epi )

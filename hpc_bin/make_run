@@ -1,0 +1,427 @@
+#!/usr/bin/env python
+# set up directory, namelist and batch scripts to run real and wrf.
+# email when each job finishes.
+# 04/04/17, dbr, removed hardcoded dependence on home directory name
+# 12/5/15, added ensemble support
+# 11/16/15, updates for yellowstone and gismelt pilot; dropped co2vmr code,
+#           now being handled directly by WRF
+# 11/18/13, unified flags for model source to "-m"
+# 3/14/13, converted to argparse for command line processing.
+#          also reverted to being based on bluefire version.
+
+import pdb, sys, os, commands, glob, math
+import argparse
+from datetime import date, timedelta, time
+
+# set up arguments (one positional, lots of optional/keyword)
+parser = argparse.ArgumentParser( description = "Create/submit batch jobs to run real and wrf scripts" )
+parser.add_argument( "mmddyy", help="month, day, year to start at", nargs=3 )
+parser.add_argument( "-n","--ndays", help="number of days to run (default: 3)", default=3, type=int, nargs="?" )
+parser.add_argument( "-p","--domains", help="domains to run, used directly in the symlink of met_em files (default: 12)", default="12", nargs="?", choices=["1","2","12"] )
+parser.add_argument( "-j","--jobtype", help="job type: 1. just a real job, 2. just a wrf job, 3. real and wrf jobs, wrf depends on real, 4. real and wrf, single job (default: 3)", default=3, type=int, nargs="?", choices=[1, 2, 3, 4] )
+parser.add_argument( "-N","--nodes", help="nodes string (default: 1-36-3-72)", default="1-36-3-72", nargs="?" )
+#parser.add_argument( "-w","--wnodes", help="nodes to use in wrf run (default: 192)", default="192", nargs="?" )
+#parser.add_argument( "-r","--rnodes", help="nodes to use in real run (default: 16)", default="16", nargs="?" )
+parser.add_argument( "-m","--model", help="input model source (default: erai)", default="erai", nargs="?", choices=["erai","ccsm4","cesmle","mri-cgcm3","cesmlw"] )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", choices=["20th.track1","historical","rcp8_5","rcp85","1pt5degC"], nargs="?" )
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-v","--verbose", help="provide some debug output", action="store_true")
+parser.add_argument( "-s","--submit", help="submit the jobs", action="store_true")
+parser.add_argument( "-H","--hold", help="submit on hold", action="store_true")
+parser.add_argument( "-d","--debug", help="enable pdb", action="store_true")
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+debug = args.debug
+if debug:
+  pdb.set_trace()
+
+mm, dd, yy = map( str, args.mmddyy )
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+ndays = args.ndays
+dpatt = args.domains
+jobtype = args.jobtype
+if jobtype == 4:
+  print "Combined real/wrf job (jobtype=4) no longer supported."
+  sys.exit()
+
+# nodeArgs: real_ncompnodes-real_processes-wrf_ncompnodes-wrf_processes
+# i.e., number of computation nodes and number of processes for real, wrf
+nodeArgs = args.nodes
+rNodes, rProc, wNodes, wProc = nodeArgs.split('-')
+rSelect = "select=%s:ncpus=%s:mpiprocs=%s" % (rNodes, rProc, rProc )
+wSelect = "select=%s:ncpus=%s:mpiprocs=%s" % (wNodes, wProc, wProc )
+
+#wnodes = args.wnodes
+#rnodes = args.rnodes
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+model = args.model
+if model not in ("erai", "ccsm4","cesmle","mri-cgcm3","cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85","1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+verbose = args.verbose
+submit = args.submit
+hold = args.hold
+if hold:
+  subcmd = "bsub -H "
+else:
+  subcmd = "bsub "
+
+if expname == "gis":
+  acctinfo = "UNMT0001"
+if expname == "ant":
+  acctinfo = "P35901011"
+
+ccsm4, cesmle, cesmlw, erai, mri = (True,)*5
+if model == "ccsm4":
+  ccsm4 = True
+  jpref = "c4"
+if model == "cesmle":
+  cesmle = True
+  jpref = "cl"
+if model == "cesmlw":
+  cesmlw = True
+  jpref = "cw"
+if model == "erai":
+  erai = True
+  jpref = "ei"
+if model == "mri-cgcm3":
+  mri = True
+  jpref = "mc"
+
+wqueue = "regular"
+
+if verbose:
+  print "Ensemble="+enss
+  print "Experiment="+expname
+  print "Account="+acctinfo
+  print "mm,dd,yy="+mm+","+dd+","+yy
+  print "ndays="+str(ndays)
+  print "Domains="+dpatt
+  print "Jobtype="+str(jobtype)
+  print "nodeArgs="+nodeArgs
+#  print "wnodes="+wnodes
+#  print "rnodes="+rnodes
+  print "Model="+model
+  print "Branch="+branch
+  if submit:
+    print "Submit"
+  else:
+    print "Normal"
+  if hold:
+    print "Held"
+  else:
+    print "Not held"
+
+# calculate actual start month
+start_date = d=date( int(yy), int(mm), int(dd) )
+dt=timedelta(1)
+new_date = start_date + dt
+yy2 = str( new_date.year )
+mm2 = str( new_date.month ).zfill(2)
+dd2 = str( new_date.day ).zfill(2)
+datestr2 = yy2+mm2+dd2
+
+# estimate number of hours
+min_save_step = 3
+nhrs = ndays * 24 - min_save_step
+
+## jobgroup info
+#jobgroup = "/dbr/realwrf"
+#joblim = 12
+
+# template files for sed
+namelist_template = "namelist.input_template"
+real_template = "mpi_real.pbs_template"
+wrf_template = "mpi_wrf.pbs_template"
+#real_template = "mpi_real.lsf_template"
+#wrf_template = "mpi_wrf.lsf_template"
+#real_wrf_template = "mpi_real_wrf.lsf_template"
+
+# calculate estimated wallclock time
+nd = int( ndays )
+real_minperday = 0.75
+minperjob = real_minperday * nd
+wc_hh = int( math.floor( minperjob / 60 ) )
+wc_mm = int( round( minperjob % 60 ) )
+wc_t = time( wc_hh, wc_mm )
+real_wc_time = wc_t.strftime( "%H:%M:%S")
+print "Estimated real time = "+real_wc_time
+
+#wrf_minperday = 36
+wrf_minperday = 10
+if jobtype == 4:
+  wrf_minperday += real_minperday
+minperjob = wrf_minperday * nd
+wc_hh = int( math.floor( minperjob / 60 ) )
+wc_mm = int( round( minperjob % 60 ) )
+wc_t = time( wc_hh, wc_mm )
+wrf_wc_time = wc_t.strftime( "%H:%M:%S")
+print "Estimated wrf time = "+wrf_wc_time
+
+# get home directory
+home = os.path.expanduser("~")
+
+# directories and file patterns
+scr_root_dir = home+"/scratch/wrf/"+expname+"_"+model+"/"+branch
+
+wps_root_dir = scr_root_dir+"/wps"
+wrf_root_dir = scr_root_dir+"/wrf"
+
+if ens > 0:
+  run_root_dir = wrf_root_dir+"/run/"+enss+"/"+str(yy2)
+  metgrid_root_dir = wps_root_dir+"/metgrid/"+enss
+else:
+  run_root_dir = wrf_root_dir+"/run/"+str(yy2)
+  metgrid_root_dir = wps_root_dir+"/metgrid"
+
+metgrid_temp_dir = "metgrid_temp"
+metfn = "met_em.d0%d.%04d-%02d-%02d_%02d:00:00.nc"
+metpatt = "met_em*.nc"
+
+wrf_home_dir = home+"/work/wrf/"+expname+"_"+model
+cust_dir = wrf_home_dir+"/src/custom"
+
+if not os.path.exists( run_root_dir ):
+  try:
+    os.makedirs( run_root_dir )
+  except OSError:
+    print "Caught makedir of existing dir "+run_root_dir
+os.chdir( run_root_dir )
+
+# create runtime directory
+rundir = datestr2
+if not os.path.exists( rundir ):
+  try:
+    os.makedirs( rundir )
+  except OSError:
+    print "Caught makedir of existing dir "+rundir
+os.chdir( rundir )
+
+# set up run dir from template dir
+
+#pdb.set_trace()
+# check that key file exist; if so, don't need to redo extract
+#key_files = ["real.exe", "wrf.exe", "mpi_real.pbs_template", "mpi_real_wrf.pbs_template", "mpi_wrf.pbs_template", "namelist.input_template" ]
+key_files = ["real.exe", "wrf.exe", "mpi_real.pbs_template", "mpi_wrf.pbs_template", "namelist.input_template" ]
+for kf in key_files:
+  if not os.path.exists( kf ):
+    print "Extracting template run directory"
+    cmd = "gunzip -c "+cust_dir+"/template_wrf_dirs/template_wrf_dir.tgz | tar xf -"
+    os.system( cmd )
+    break
+
+# call timesteps to get start/end "in practice"
+cmd = "timesteps "+str(mm)+" "+str(dd)+" "+str(yy)+" "+str(ndays)
+os.system( cmd )
+
+## read in start/end dates
+ifile = open( datestr, "r" )
+t_list = ifile.readlines()
+ifile.close()
+args = t_list[0].split()
+syy = args[0]
+smm = args[1]
+sdd = args[2]
+args = t_list[1].split()
+eyy = args[0]
+emm = args[1]
+edd = args[2]
+print "Run start date = "+syy+"/"+smm+"/"+sdd
+print "Run end date = "+eyy+"/"+emm+"/"+edd
+
+# need to call timesteps again with "last day+1".  the first file from that
+# day needs to be symlinked for wrf to succeed.
+cmd = "timesteps "+str(mm)+" "+str(dd)+" "+str(yy)+" "+str(ndays+1)
+os.system( cmd )
+
+## read in end date for symlinks
+ifile = open( datestr, "r" )
+t_list = ifile.readlines()
+ifile.close()
+args = t_list[1].split()
+eyy = args[0]
+emm = args[1]
+edd = args[2]
+end_date = "%04d%02d%02d" % (int(eyy), int(emm), int(edd))
+
+# read in timesteps to process
+ifile = open( datestr+"_ts", "r" )
+ts_list = ifile.readlines()
+ifile.close()
+
+# processing of metgrid files, only needed if running real
+if jobtype != 2:
+  # first, create temp dir for metgrid symlinks, if necessary
+  if not os.path.exists( metgrid_temp_dir ):
+    try:
+      os.makedirs( metgrid_temp_dir )
+    except OSError:
+      print "Caught makedir of existing dir "+metgrid_temp_dir
+  os.chdir( metgrid_temp_dir )
+
+  # second, delete any existing symlinks in temp dir
+  ll = glob.glob( metpatt )
+  if len(ll) > 0:
+    for ff in ll:
+      os.unlink( ff )
+
+  # third, create new symlinks to metgrid files appropriate
+  # to the time period being processed.
+  # exit if any are missing.
+  for ts in ts_list:
+    args = ts.split()
+    tyy = int(args[0])
+    tmm = int(args[1])
+    tdd = int(args[2])
+    thh = int(args[3])
+    met_em_dir = metgrid_root_dir+"/"+str(tyy)
+    met_em_subdir = "%04d%02d%02d" % (tyy, tmm, tdd)
+
+    for i in range( len( dpatt )):
+      fn = metfn % ( i+1, tyy, tmm, tdd, thh )
+      if verbose:
+        print fn
+      full_met_fn = met_em_dir+"/"+met_em_subdir+"/"+fn
+      if os.path.exists( full_met_fn ):
+        cmd = "ln -sf "+full_met_fn+" "+fn
+        os.system( cmd )
+      else:
+        print "metgrid file not found, exiting"
+        print full_met_fn
+        sys.exit()
+
+    if met_em_subdir == end_date:
+      break
+
+  os.chdir( ".." )
+
+  # fourth, link met_em files from temp dir into run dir
+  ll = glob.glob( metpatt )
+  if len(ll) > 0:
+    for ff in ll:
+      os.unlink( ff )
+  cmd = "ln -sf "+metgrid_temp_dir+"/* ."
+  os.system( cmd )
+
+# edit namelist template
+jyy = yy2
+jmm = mm2
+jdd = dd2
+
+cmd = "sed -e s/SYY/"+syy+"/g -e s/SMM/"+smm+"/g -e s/SDD/"+sdd+"/g -e s/EYY/"+eyy+"/g -e s/EMM/"+emm+"/g -e s/EDD/"+edd+"/g -e s/RHRS/"+str(nhrs)+"/g < "+namelist_template+" > namelist.input"
+os.system( cmd )
+os.system( "cp namelist.input namelist.input_real" )
+
+if jobtype == 4:
+  pass  # not currently supported (5/23/18)
+#  # edit real_wrf batch script template
+#  cmd = "sed -e s/ACCT/"+acctinfo+"/ -e s/WNODES/"+wnodes+"/ -e s/X/"+jpref+"/ -e s/SYY/"+jyy+"/ -e s/SMM/"+jmm+"/ -e s/SDD/"+jdd+"/ -e s/CLOCK/"+wrf_wc_time+"/ < "+real_wrf_template+" > mpi_real_wrf.pbs"
+#  os.system( cmd )
+else:
+  if jobtype != 2:
+    # edit real batch script template
+    cmd = "sed -e s/ACCT/"+acctinfo+"/ -e s/SELECT/"+rSelect+"/ -e s/X/"+jpref+"/ -e s/SYY/"+jyy+"/ -e s/SMM/"+jmm+"/ -e s/SDD/"+jdd+"/ -e s/CLOCK/"+real_wc_time+"/ < "+real_template+" > mpi_real.pbs"
+    os.system( cmd )
+
+  if jobtype != 1:
+    # edit wrf batch script template
+    cmd = "sed -e s/ACCT/"+acctinfo+"/ -e s/SELECT/"+wSelect+"/ -e s/X/"+jpref+"/ -e s/WQUEUE/"+wqueue+"/ -e s/SYY/"+jyy+"/ -e s/SMM/"+jmm+"/ -e s/SDD/"+jdd+"/ -e s/CLOCK/"+wrf_wc_time+"/ < "+wrf_template+" > mpi_wrf.pbs"
+    os.system( cmd )
+# *****************************************************
+# wrf_split
+# *****************************************************
+#    if model != "erai":
+#      # split wrf batch job into three pieces
+#      # note: script does NOT attempt to submit these!
+#      if model == "ccsm4":
+#        os.system( "wrf_split "+jyy+" "+jmm )
+#      else:
+#        os.system( "wrf_split "+jyy+" "+jmm+" 1" )
+# *****************************************************
+
+## does batch job group exist?  add if not found
+##pdb.set_trace()
+#cmd = "bjgroup -s "+jobgroup
+#res = commands.getoutput( cmd )
+#if res.startswith("No job group"):
+#  cmd = "bgadd -L "+str(joblim)+" "+jobgroup
+#  os.system( cmd )
+
+if submit:
+  print "Support for submit has been disabled"
+  pass
+#  # submit the job(s)
+#  if jobtype == 4:
+#    # submit batch job for real.exe and wrf.exe
+#    if mri:
+#      jnamew = "real_wrf_"+datestr2
+#    else:
+#      jnamew = "real_wrf_"+datestr
+#    cmd = subcmd+" -g"+jobgroup+" -J "+jnamew+" < mpi_real_wrf.pbs"
+#    s1 = commands.getoutput( cmd )
+#    s2 = s1.split(' ')[1]
+#    jobid_wrf = s2.strip('<>')
+#  else:
+#    if jobtype == 1 or jobtype == 3:
+#      # submit batch job for real.exe
+#      if mri:
+#        jnamer = "real_"+datestr2
+#      else:
+#        jnamer = "real_"+datestr
+#      cmd = subcmd+" -g"+jobgroup+" -J "+jnamer+" < mpi_real.pbs"
+#      s1 = commands.getoutput( cmd )
+#      s2 = s1.split(' ')[1]
+#      jobid_real = s2.strip('<>')
+#
+#    if jobtype == 2 or jobtype ==3:
+#      # submit batch job for wrf.exe
+#      if mri:
+#        jnamew = "wrf_"+datestr2
+#      else:
+#        jnamew = "wrf_"+datestr
+#      if jobtype == 3: # w/dependency on real.exe job
+#        cmd = subcmd+" -g"+jobgroup+" -J "+jnamew+" -w 'done("+jobid_real+")' < mpi_wrf.pbs"
+#      else: # w/o dependency
+#        cmd = subcmd+" -H -g"+jobgroup+" -J "+jnamew+" < mpi_wrf.pbs"
+#      s1 = commands.getoutput( cmd )
+#      s2 = s1.split(' ')[1]
+#      jobid_wrf = s2.strip('<>')
+#
+#  # provide info on jobnames/numbers
+#  if jobtype == 1:
+#    print "Submitted %s(%s)" % (jnamer, jobid_real)
+#  elif jobtype == 2:
+#    print "Submitted %s(%s)" % (jnamew, jobid_wrf)
+#  elif jobtype == 3:
+#    print "Submitted %s(%s) and %s(%s)" % (jnamer, jobid_real, jnamew, jobid_wrf)
+#    print "WRF job will start after real job completes."
+#  else:
+#    print "Submitted %s(%s)" % (jnamew, jobid_wrf)
+#
+#  if held:
+#    print "Jobs are held. Use 'bresume jobnum' to release."
+else:
+  print "Job(s) not submitted, just created"
+  if jobtype == 4:
+    print "See mpi_real_wrf.pbs"
+  else:
+    if jobtype == 1 or jobtype == 3:
+      print "See mpi_real.pbs"
+    if jobtype == 2 or jobtype ==3:
+      print "See mpi_wrf.pbs"

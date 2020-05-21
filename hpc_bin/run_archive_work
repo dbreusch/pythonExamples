@@ -1,0 +1,155 @@
+#!/usr/bin/env python
+# run_archive:
+# create jobs to run WRF work-file archiving script.
+# 6/11/12, dbr, added update/overwrite option
+# 4/16/13, dbr, added support for ccsm
+# 02/05/16, made universal, added argparse
+
+import pdb, sys, os, commands, argparse
+
+# set up argument parser
+parser = argparse.ArgumentParser( description = "Run WRF work file archiver" )
+
+# define arguments
+parser.add_argument( "script_cmd", help="script to run" )
+parser.add_argument( "dirlist", help="directories to process" )
+parser.add_argument( "-p","--prefix", help="prefix for batch file name/job name (default: archwork)", nargs="?", default="archwork" )
+parser.add_argument( "-S","--submit", help="automatically submit batch job (default y)", nargs="?", default="y" )
+parser.add_argument( "-J","--jnum", help="starting number suffix for jobs (default 1)", nargs="?", default=1 )
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-u","--update", help="update/overwrite existing tar-file (default: o)", nargs="?",default="o")
+parser.add_argument( "-v","--version", help="version for output file (default: v1)", nargs="?",default="v1")
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+script_cmd = args.script_cmd
+dirlist = args.dirlist
+jname = args.prefix
+submit = args.submit
+jnum = int(args.jnum)
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+update = args.update
+if update not in ("o", "u"):
+  print "Update arg must be 'o' (overwrite) or 'u' (update)"
+  sys.exit()
+version = args.version
+
+job_acct = "UNMT0001"
+#queue = "regular"
+queue = "casper"
+wc_time = "00:20:00"
+jobs_per_block = 16 # equates to number of cores available
+max_job_blocks = 16  # max number of blocks of jobs per batch job
+
+wrf_root_dir = "/glade/u/home/dbr/wrf"
+cust_dir = wrf_root_dir+"/gis_cesmle/src/custom"
+
+# read in complete list of directories to process
+if not os.path.exists( dirlist ):
+  print "Input file "+dirlist+" not found.  Exiting..."
+  sys.exit()
+ifile = open( dirlist, "r" )
+file_list = ifile.readlines()
+ifile.close()
+file_list.reverse()
+flen = len(file_list)
+
+# start batch job creation loop
+while flen > 0:
+  batch_root = "%s_%03d" % (jname, jnum)
+  n_job_blocks = 1
+
+  # create batch job filenames
+  batch_fn_pro = batch_root+"_pro"
+  batch_fn_cmds = batch_root+"_mid"
+  batch_fn_epi = batch_root+"_epi"
+  fn_job = batch_root
+
+  # create (edit) batch_prolog
+  cmd = "sed -e s/BASE_DATESTR/"+fn_job+"/g -e s/CLOCK/"+wc_time+"/g -e s/QUEUE/"+queue+"/g -e s/ACCT/"+job_acct+"/g < "+cust_dir+"/batch_prolog > "+batch_fn_pro
+  os.system( cmd )
+
+  # create (copy) batch_epilog
+  cmd = "cp "+cust_dir+"/batch_epilog "+batch_fn_epi
+  os.system( cmd )
+
+  # process some file names
+  ofile = open( batch_fn_cmds, "w" )
+  ofile.write( "module load python\n" )
+  ofile.write( "\n" )
+
+  fcnt = 1
+  while flen > 0:
+    fn = file_list.pop()
+    flen = len(file_list)
+    if fn[0] == "#":
+      continue
+
+    lst = fn.split('/')
+#    pdb.set_trace()
+#    branch = lst[1]
+    diryy = lst[1]
+    dirstr = lst[2]
+    dirmm = dirstr[4:6]
+    dirdd = dirstr[6:].rstrip()
+    ofile.write( script_cmd+" " )
+    ofile.write( diryy+dirmm+dirdd )
+    ofile.write( " -m "+model )
+    ofile.write( " -b "+branch )
+    ofile.write( " -e "+expname )
+    ofile.write( " -E "+str(ens) )
+    ofile.write( " -u "+update )
+    ofile.write( " -v "+version )
+    ofile.write( " &\n" )
+
+    fcnt += 1
+    if fcnt > jobs_per_block:
+      ofile.write( "wait\n" )
+      n_job_blocks += 1
+      fcnt = 1
+      if n_job_blocks > max_job_blocks:
+        break
+
+  if n_job_blocks < 2:
+    if fcnt <= jobs_per_block:
+      ofile.write( "wait\n" )
+  ofile.close()
+
+# put pieces together
+  cmd = "cat "+batch_fn_pro+" "+batch_fn_cmds+" "+batch_fn_epi+" > "+fn_job
+  os.system( cmd )
+  print "Batch job in file "+fn_job
+  if submit == "y":
+    cmd = "bsub < "+fn_job
+    os.system( cmd )
+
+# clean up
+  os.unlink( batch_fn_pro )
+  os.unlink( batch_fn_cmds )
+  os.unlink( batch_fn_epi )
+
+  jnum += 1
+
+  if flen == 0:
+    break

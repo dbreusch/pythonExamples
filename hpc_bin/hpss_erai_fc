@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+# hpss_erai_fc:
+# create jobs to retrieve ERA-Interim forecast data from HPSS.
+# jobs operate by var for a specified time period.
+#
+# Scripts and messages go to current directory
+#
+# LSF jobs submitted to job group /ptmp/dbr/hpsserai
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, math, commands
+from datetime import time
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Syntax:  hpss_erai_fc fc_var year1 year2 [submit]"
+  print "  fc_var = variable to process, e.g., sshf_146"
+  print "  year1, year2 = start and end years"
+  print "  submit = 'y' to automatically submit batch job"
+  sys.exit()
+
+# get command line args
+fc_var = sys.argv[1]
+year1 = sys.argv[2]
+year2 = sys.argv[3]
+nyears = int(year2) - int(year1) + 1
+year_list = range( int(year1), int(year2)+1 )
+fc_varname = fc_var.split('_')[0]
+jobstr = fc_varname+"_"+year1[-2:]+"-"+year2[-2:]
+
+if nargin < 5:
+  submit = "n"
+else:
+  submit = sys.argv[4]
+
+# LSF info
+jname = "hpss"
+queue = "share"
+jobgroup = "/ptmp/dbr/hpsserai"
+joblim = 4
+
+# runtime dirs
+scr_dir = os.getcwd()
+cust_dir = "/projects/dbr/wrf/src/custom"
+user_dir = "/lustre/janus_scratch/dbr/data/erai/grb_fc"
+
+# filename patterns
+dss_prefix = "/DSS/DS627.2/ei.oper.fc.sfc/%04d"
+dss_name = "ei.oper.fc.sfc.regn128sc.%s.%04d"
+
+# calculate estimated wallclock time
+minperyear = 3
+minperjob = minperyear * nyears
+wc_hh = int( math.floor( minperjob / 60 ) )
+wc_mm = minperjob % 60
+wc_t = time( wc_hh, wc_mm )
+wc_time = wc_t.strftime( "%H:%M")
+
+#pdb.set_trace()
+lsf_fn_cmds = scr_dir+"/lsf_"+jname+"_"+jobstr+"_mid"
+
+# create lsf job filename
+lsf_fn_pro = scr_dir+"/lsf_"+jname+"_"+jobstr+"_pro"
+lsf_fn_epi = scr_dir+"/lsf_"+jname+"_"+jobstr+"_epi"
+fn_job = scr_dir+"/lsf_"+jname+"_"+jobstr
+
+# create (edit) lsf_prolog
+cmd = "sed s/DATESTR/"+jobstr+"/g < "+cust_dir+"/lsf_prolog | sed s/CLOCK/"+wc_time+"/g | sed s/QUEUE/"+queue+"/g | sed s/BASE/"+jname+"/g > "+lsf_fn_pro
+os.system( cmd )
+
+# create (copy) lsf_epilog
+cmd = "cp "+cust_dir+"/lsf_epilog "+lsf_fn_epi
+os.system( cmd )
+
+# create lsf commands
+ofile = open( lsf_fn_cmds, "w" )
+fcnt = 0
+for year in year_list:
+
+  # make output directory (if necessary)
+  grb_dir = user_dir+"/"+str(year)
+  if not os.path.exists( grb_dir ):
+    os.makedirs( grb_dir )
+
+  # create HPSS and output filenames
+  a = dss_prefix % year
+  b = dss_name % (fc_var, year)
+  dss_fn = a+"/"+b
+  grb_fn = grb_dir+"/"+b+".grb"
+  if os.path.exists( grb_fn ):
+    print "Skipping "+b+", file exists"
+  else:
+    # HPSS command
+    cmd = "hsi cget "+grb_fn+" : "+dss_fn
+    print b
+    ofile.write( cmd+"\n" )
+    fcnt += 1
+
+ofile.close()
+
+# put pieces together
+if fcnt>0:
+  cmd = "cat "+lsf_fn_pro+" "+lsf_fn_cmds+" "+lsf_fn_epi+" > "+fn_job
+  os.system( cmd )
+  print "LSF job in file "+fn_job
+  if submit == "y":
+    cmd = "bjgroup -s "+jobgroup
+    res = commands.getoutput( cmd )
+    if res.startswith("No job group"):
+      cmd = "bgadd -L "+str(joblim)+" "+jobgroup
+      os.system( cmd )
+    cmd = "bsub -g "+jobgroup+" < "+fn_job
+    os.system( cmd )
+else:
+  print "No files to recall, skipping job"
+
+# clean up
+if os.path.exists( lsf_fn_pro ):
+  os.unlink( lsf_fn_pro )
+if os.path.exists( lsf_fn_cmds ):
+  os.unlink( lsf_fn_cmds )
+if os.path.exists( lsf_fn_epi ):
+  os.unlink( lsf_fn_epi )

@@ -1,0 +1,111 @@
+#!/usr/bin/env python
+# create a Run_yyyy script that calls make_run
+# 12/5/15, added ensemble support
+# 04/04/17, dbr, removed hardcoded dependence on home directory name
+
+import pdb, os, commands, math
+import argparse, calendar
+from datetime import date, timedelta, time
+
+# set up arguments (three positional, some optional)
+parser = argparse.ArgumentParser( description = "Build Run_yyy script" )
+parser.add_argument( "mmyy", help="month, year to start at", nargs=2 )
+parser.add_argument( "ndays", help="number of days to run (default: 3)", default=3, type=int, nargs=1 )
+parser.add_argument( "-p","--domains", help="domains to run, used directly in the symlink of met_em files (default: 1)", default="1", nargs="?", choices=["1","2","12"] )
+parser.add_argument( "-m","--model", help="input model source (default: erai)", default="erai", nargs="?", choices=["erai","ccsm4","cesmle","mri-cgcm3","cesmlw"] )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", choices=["20th.track1","historical","rcp8_5","rcp85","1pt5degC"], nargs="?" )
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-n","--nodes", help="nodes string (default: 1-36-3-72)", default="1-36-3-72", nargs="?" )
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+mm, yy = map( str, args.mmyy )
+if len(mm) < 2:
+  mm = '%02d' % int(mm)
+ndays = args.ndays[0]
+print mm+" "+yy+" "+str(ndays)
+domains = args.domains
+model = args.model
+if model not in ("erai", "ccsm4","cesmle","cesmlw","mri-cgcm3"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85","1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+nodeArgs = args.nodes
+
+# get home directory
+home = os.path.expanduser("~")
+
+# get starting date minus a day
+utildir = home+"/work/wrf/src/ccsm/INPUT/UTIL/DATETIME"
+expdate = yy+"-"+mm+"-01"
+cmd = utildir+"/geth_newdate.exe "+expdate+" -1"
+res = commands.getoutput( cmd )
+prevyy = res[0:4]
+prevmm = res[5:7]
+prevdd = res[8:10]
+datestr = prevyy+prevmm+prevdd
+
+# how many days in the run month
+ndsmon = calendar.monthrange(int(yy), int(mm))[1]
+
+# call timesteps to get start dates
+#pdb.set_trace()
+cmd = "timesteps "+prevmm+" "+prevdd+" "+prevyy+" "+str(ndsmon+1)+" "+str(ndays)
+os.system( cmd )
+
+# read in start/end dates (only used for information output)
+ifile = open( datestr, "r" )
+t_list = ifile.readlines()
+ifile.close()
+args = t_list[0].split()
+syy = args[0]
+smm = args[1]
+sdd = args[2]
+args = t_list[1].split()
+eyy = args[0]
+emm = args[1]
+edd = args[2]
+print "Run from "+syy+"/"+smm+"/"+sdd+" to "+eyy+"/"+emm+"/"+edd
+
+# read in job start dates
+ifile = open( datestr+"_jobs", "r" )
+r_list = ifile.readlines()
+ifile.close()
+
+# create run script: one make_run for each job start date
+ofile = open( "Run_"+yy, "w" )
+ofile.write( "#!/bin/tcsh -f\n" )
+if ens > 0:
+  ofile.write( "# Run make_run for "+mm+"/"+yy+", ensemble "+enss+"\n" )
+else:
+  ofile.write( "# Run make_run for "+mm+"/"+yy+"\n" )
+ofile.write( "\n" )
+
+for ts in r_list:
+#  args = ts.split()
+  tyy, tmm, tdd, nd = map( str, ts.split() )
+
+  s = "make_run "+tmm+" "+tdd+" "+tyy+" --ndays "+nd+" --domains "+domains+" -m "+model+" --branch "+branch+" --nodes "+nodeArgs
+  if ens > 0:
+    s = s+" --ensemble "+str(ens)
+  ofile.write( s+"\n" )
+ofile.close()
+
+# make script executable
+cmd = "chmod +x Run_"+yy
+os.system( cmd )
+
+# clean up
+os.unlink( datestr )
+os.unlink( datestr+"_ts" )
+os.unlink( datestr+"_jobs" )

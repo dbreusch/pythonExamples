@@ -1,0 +1,200 @@
+#!/usr/bin/env python
+# setup_wps_dir:
+# create and customize WPS run directory
+#
+# 12/4/15, added ensemble support
+# 11/10/15, improvement updates
+# 3/14/13, converted to argparse for command line processing
+
+import pdb, sys, os
+import argparse
+
+# set up arguments
+parser = argparse.ArgumentParser( description = "set up a WPS run directory" )
+parser.add_argument( "mmddyy", help="month, day, year to start at", nargs=3 )
+parser.add_argument( "-n","--ndays", help="number of days to process (defaults to 1)", nargs="?", default="1" )
+parser.add_argument( "-r","--recovery", help="this is a recovery job", action="store_true" )
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-v","--verbose", help="provide some debug output", action="store_true")
+parser.add_argument( "-d","--debug", help="enable pdb", action="store_true")
+parser.add_argument( "-w","--wpsstep", help="which WPS processing step (ungrib, metgrid)", default="ungrib", nargs="?" )
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+mm, dd, yy = map( str, args.mmddyy )
+ndays = args.ndays
+recovery = args.recovery
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+branch = args.branch
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+verbose = args.verbose
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+debug = args.debug
+wps_step = args.wpsstep
+if wps_step not in ("ungrib", "metgrid"):
+  print "WPS processing step "+wps_step+" not recognized"
+  sys.exit()
+
+if debug:
+  pdb.set_trace()
+
+if verbose:
+  print "mm,dd,yy="+mm+","+dd+","+yy
+  print "ndays="+ndays
+  if recovery:
+    print "Recovery"
+  else:
+    print "Normal"
+  print "Model="+model.upper()
+  print "Branch="+branch
+  print "Experiment="+expname
+  print "Ensemble="+enss
+
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+size_file = "/glade/u/home/dbr/wrf/"+expname+"_"+model+"/metgrid/met_em.dxx_sizes"
+
+hour_list = ["00", "06", "12", "18"]
+met_template = "met_em.%s.%s-%s-%s_%s:00:00.nc"
+
+# load expected file sizes
+if os.path.exists( size_file ):
+  ifile = open( size_file, "r" )
+  size_list = map( int, ifile.readlines())
+  ndom = len( size_list )
+#  domain_list = [ "d01", "d02" ]
+  domain_list = [ "d%02d" % x for x in range(1,ndom+1) ]
+  ifile.close()
+else:
+  size_list = []
+  domain_list = []
+
+# key directories
+wrf_root_dir = "/glade/u/home/dbr/scratch/wrf/"+expname+"_"+model+"/"+branch
+if ens > 0:
+  run_root_dir = wrf_root_dir+"/wps/run/"+enss
+else:
+  run_root_dir = wrf_root_dir+"/wps/run"
+
+#ungrib_root_dir = "/glade/scratch/dbr/data/"+model+"/"+branch+"/intermed"
+# /glade/u/home/dbr/scratch/wrf/gis_cesmlw/1pt5degC/wps/intermed/011
+ungrib_root_dir = wrf_root_dir+"/wps/intermed"
+if ens > 0:
+  ungrib_root_dir = ungrib_root_dir+"/"+enss
+
+wrf_home_dir = "/glade/u/home/dbr/wrf/"+expname+"_"+model+"/src"
+cust_dir = wrf_home_dir+"/custom"
+
+# check that main ungrib directory exists, create if it doesn't
+rootdir = ungrib_root_dir+"/"+str(yy)
+if not os.path.exists( rootdir ):
+  try:
+    os.makedirs( rootdir )
+  except OSError:
+    print "Caught makedir of existing dir "+rootdir
+os.chdir( rootdir )
+
+# check that ungrib output subdirectory exists
+if not os.path.exists( datestr ):
+  try:
+    os.makedirs( datestr )
+  except OSError:
+    print "Caught makedir of existing dir "+datestr
+os.chdir( datestr )
+
+# check that main run directory exists, create if it doesn't
+rootdir = run_root_dir+"/"+str(yy)
+if not os.path.exists( rootdir ):
+  try:
+    os.makedirs( rootdir )
+  except OSError:
+    print "Caught makedir of existing dir "+rootdir
+os.chdir( rootdir )
+
+# check that run subdirectory exists
+if not os.path.exists( datestr ):
+  try:
+    os.makedirs( datestr )
+  except OSError:
+    print "Caught makedir of existing dir "+datestr
+os.chdir( datestr )
+
+# set up run dir from template dir, but only if the file README
+# can't be found!
+if not os.path.exists( "README" ):
+  cmd = "gunzip -c "+cust_dir+"/template_wps_dirs/template_wps_dir.tgz | tar xf -"
+  os.system( cmd )
+
+# call timesteps to create time files
+cmd = "timesteps "+mm+" "+dd+" "+yy+" "+ndays
+os.system( cmd )
+
+# read in start/end dates
+ifile = open( datestr, "r" )
+t_list = ifile.readlines()
+ifile.close()
+args = t_list[0].split()
+syy = args[0]
+smm = args[1]
+sdd = args[2]
+args = t_list[1].split()
+eyy = args[0]
+emm = args[1]
+edd = args[2]
+
+if not recovery:
+  shh1 = "00"
+  shh2 = "00"
+  act1 = ".true."
+  act2 = ".true."
+else:
+  workdir = run_root_dir+"/"+str(yy)+"/"+datestr
+  curr_dir = os.getcwd()
+  os.chdir( workdir )
+
+  # check existing files, if any
+  active_list = []
+  shour_list = []
+  for dmn, expsize in zip( domain_list, size_list ):
+    filecnt = 0
+    for hr in hour_list:
+      test_fn = met_template % ( dmn, yy, mm, dd, hr )
+      if os.path.exists( test_fn ): # file exists
+        filesize = os.path.getsize( test_fn )
+        if filesize == expsize:
+          filecnt += 1  # match expected size
+        else:
+          break # file is wrong size
+      else:
+        break # file is missing
+
+    if filecnt < 4:
+      active_list.append( '.true.' )  # pick up at specific hour
+      shour_list.append( hr )
+    else:
+      active_list.append( '.false.' ) # skip this domain, all files correct
+      shour_list.append( "00" )
+
+  act1, act2 = map( str, active_list )
+  shh1, shh2 = map( str, shour_list )
+  os.chdir( curr_dir )
+
+# edit namelist for start/end dates and custom output dir name
+cmd = "sed -e s/SYY/"+syy+"/g -e s/SMM/"+smm+"/g -e s/SDD/"+sdd+"/g -e s/EYY/"+eyy+"/g -e s/EMM/"+emm+"/g -e s/EDD/"+edd+"/g -e s/DATESTR/"+datestr+"/g -e s/SHH1/"+shh1+"/g -e s/SHH2/"+shh2+"/g -e s/ACT1/"+act1+"/g -e s/ACT2/"+act2+"/g -e s/PERIOD/"+branch+"/g -e s/MODEL/"+model+"/g -e s/ENS/"+enss+"/g < namelist.wps_template > namelist.wps_"+wps_step
+os.system( cmd )
+cmd = "ln -fs namelist.wps_"+wps_step+" namelist.wps"
+os.system( cmd )

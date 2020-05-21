@@ -1,0 +1,149 @@
+#!/usr/bin/env python
+# run_ungrib:
+# create LSF jobs to run ungrib script.
+# 11/10/15, updates for yellowstone and gismelt pilot
+
+import pdb, sys, os, commands
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Syntax:  run_ungrib script dirlist exp [model] [branch] [prefix] [submit] [jnum]"
+  print "  script = script to run on each file"
+  print "  dirlist = list of grb directories to process"
+  print "  exp = experiment name"
+  print "  model = model name (default erai)"
+  print "  branch = model branch (default historical)"
+  print "  prefix = prefix for LSF batch file name/job name (default lsf_ungrib)"
+  print "  submit = 'y' to automatically submit batch job (default y)"
+  print "  jnum = starting number suffix for LSF jobs (default 1)"
+  sys.exit()
+
+# get command line args
+script_cmd = sys.argv[1]
+dirlist = sys.argv[2]
+expname = sys.argv[3]
+if expname not in ("gis", "ant"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+if expname == "gis":
+  acctinfo = "UNMT0001"
+if expname == "ant":
+  acctinfo = "P35901011"
+if nargin < 5:
+  model = "erai"
+else:
+  model = sys.argv[4]
+if nargin < 6:
+  branch = "historical"
+else:
+  branch = sys.argv[5]
+if nargin < 7:
+  prefix = "lsf_ungrib"
+else:
+  prefix = sys.argv[6]
+if nargin < 8:
+  submit = "y"
+else:
+  submit = sys.argv[7]
+if nargin < 9:
+  jnum = 1
+else:
+  jnum = int(sys.argv[8])
+
+ndays = 1
+jobs_per_block = 16 # equates to number of cores available
+max_job_blocks = 4  # max number of blocks of jobs per batch job
+
+#pdb.set_trace()
+jname = prefix
+queue = "geyser"
+#queue = "regular"
+#queue = "share"
+wc_time = "00:10" # kind of arbitrary
+
+# only apply when submitting job
+jobgroup = "/ptmp/dbr/ungrib"
+joblim = 12
+
+wrf_root_dir = "/glade/p/work/dbr/wrf/"+expname+"_"+model
+cust_dir = wrf_root_dir+"/src/custom"
+
+# read in complete list of directories to process
+ifile = open( dirlist, "r" )
+file_list = ifile.readlines()
+ifile.close()
+file_list.reverse()
+flen = len(file_list)
+
+# start batch job creation loop
+while flen > 0:
+  lsf_root = "%s_%03d" % (jname, jnum)
+  n_job_blocks = 1
+
+  # create lsf job filenames
+  lsf_fn_pro = lsf_root+"_pro"
+  lsf_fn_cmds = lsf_root+"_mid"
+  lsf_fn_epi = lsf_root+"_epi"
+  fn_job = lsf_root
+
+  # create (edit) lsf_prolog
+  cmd = "sed -e s/ACCT/"+acctinfo+"/g -e s/BASE_DATESTR/"+fn_job+"/g -e s/CLOCK/"+wc_time+"/g -e s/QUEUE/"+queue+"/g < "+cust_dir+"/lsf_prolog > "+lsf_fn_pro
+  os.system( cmd )
+
+  # create (copy) lsf_epilog
+  cmd = "cp "+cust_dir+"/lsf_epilog "+lsf_fn_epi
+  os.system( cmd )
+
+  # process some file names
+  ofile = open( lsf_fn_cmds, "w" )
+  fcnt = 1
+
+  while flen > 0:
+    fn = file_list.pop().rstrip()
+    flen = len(file_list)
+    if fn[0] == "#":
+      continue
+
+    lst = fn.split('/')
+    diryy = lst[1]
+    dirstr = lst[2]
+    dirmm = dirstr[4:6]
+    dirdd = dirstr[6:].rstrip()
+
+    ofile.write( script_cmd+" " )
+    ofile.write( dirmm+" "+dirdd+" "+diryy+" "+str(ndays)+" " )
+    ofile.write( expname+" "+model+" "+branch )
+    ofile.write( " &\n" )
+
+    fcnt += 1
+    if fcnt > jobs_per_block:
+      ofile.write( "wait\n" )
+      n_job_blocks += 1
+      fcnt = 1
+      if n_job_blocks > max_job_blocks:
+        break
+
+  ofile.close()
+
+# put pieces together
+  cmd = "cat "+lsf_fn_pro+" "+lsf_fn_cmds+" "+lsf_fn_epi+" > "+fn_job
+  os.system( cmd )
+  print "LSF job in file "+fn_job
+  if submit == "y":
+    cmd = "bjgroup -s "+jobgroup
+    res = commands.getoutput( cmd )
+    if res.startswith("No job group"):
+      cmd = "bgadd -L "+str(joblim)+" "+jobgroup
+      os.system( cmd )
+    cmd = "bsub -g "+jobgroup+" < "+fn_job
+    os.system( cmd )
+
+# clean up
+  os.unlink( lsf_fn_pro )
+  os.unlink( lsf_fn_cmds )
+  os.unlink( lsf_fn_epi )
+
+  jnum += 1
+
+  if flen == 0:
+    break

@@ -1,0 +1,101 @@
+#!/usr/bin/env python
+# use NCO to add upward radiation files
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, commands, random
+import numpy, Nio
+
+nargin = len(sys.argv)
+if nargin < 4:
+  print "Usage: add_up_rad infile1 infile2 outvar [root_dir]"
+  print "  infile1 = file with down_var"
+  print "  infile2 = file with net_var"
+  print "  outvar = output variable name (also part of output file name)"
+  print "  root_dir = input directory for file"
+#  print "    defaults to /Volumes/linux_backup/antmelt_work/erai/sub_var"
+  print "    defaults to /lustre/janus_scratch/dbr/data/erai/fc_monthly"
+  sys.exit()
+
+# set infiles, outvar and root_dir
+infile1 = sys.argv[1]
+infile2 = sys.argv[2]
+outvar = sys.argv[3]
+if nargin < 5:
+  root_dir = "/lustre/janus_scratch/dbr/data/erai/fc_monthly"
+#  root_dir = "/Volumes/linux_backup/antmelt_work/erai/sub_var"
+#  root_dir = "/Volumes/freeze/antmelt_work/erai"
+else:
+  root_dir = sys.argv[4]
+ifn1 = os.path.normpath( root_dir+"/"+infile1 )
+if not os.path.exists( ifn1 ):
+  print "Input file "+ifn1+" not found, exiting"
+  sys.exit()
+ifn2 = os.path.normpath( root_dir+"/"+infile2 )
+if not os.path.exists( ifn2 ):
+  print "Input file "+ifn2+" not found, exiting"
+  sys.exit()
+
+# get input var names from file names
+tfn = os.path.basename( infile1 )
+parts = tfn.split('.')
+invar1 = parts[5]
+tfn = os.path.basename( infile2 )
+parts = tfn.split('.')
+invar2 = parts[5]
+
+# build output file name
+ofn = ifn1.replace( invar1, outvar )
+print os.path.basename( ofn )
+
+# temporary file name
+basefn = ofn[:-3]
+workfile = basefn+"_f"+str(random.randint(1001,9999))+".nc"
+
+# make sure input vars are there
+ncfile = Nio.open_file( ifn1, "r" )
+ncvars = ncfile.variables
+ncfile.close()
+if invar1 not in ncvars:
+  print invar1+" not found in input file.  Exiting..."
+  sys.exit()
+ncfile = Nio.open_file( ifn2, "r" )
+ncvars = ncfile.variables
+ncfile.close()
+if invar2 not in ncvars:
+  print invar2+" not found in input file.  Exiting..."
+  sys.exit()
+
+# 1) copy infile1 to the work file
+cmd = "cp "+infile1+" "+workfile
+os.system( cmd )
+
+# 2) add invar2 to work file
+nco_cmd = "ncks -A "+infile2+" "+workfile
+os.system( nco_cmd )
+
+# 3) create new var in the work file with ncap2
+nco_cmd = "ncap2 -O -s '"+outvar+"="+invar1+"-"+invar2+";' "+workfile+" "+workfile
+os.system( nco_cmd )
+
+# 4) put new var into new output file
+nco_cmd = "ncks -O -v "+outvar+" "+workfile+" "+ofn
+os.system( nco_cmd )
+
+#pdb.set_trace()
+# 5) modify long_name attribute of new var
+ncfile = Nio.open_file( ofn, "r" )
+ncvars = ncfile.variables
+ncfile.close()
+curr_long_name = ncvars[outvar].attributes['long_name']
+new_long_name = curr_long_name.replace( "downwards", "(net)" )
+nco_cmd = 'ncatted -O -a long_name,'+outvar+',o,c,"'+new_long_name+'" '+ofn
+os.system( nco_cmd )
+
+# 6) add note that this is a calculated variable
+nco_cmd = 'ncatted -O -a source,'+outvar+',c,c,"Calculated from '+invar1+' and '+invar2+'" '+ofn
+os.system( nco_cmd )
+
+# clean up
+if os.path.exists( workfile ):
+  os.unlink( workfile )

@@ -1,0 +1,63 @@
+#!/usr/bin/env python
+# universal "file list" generator
+
+import pdb, os, argparse, calendar
+from datetime import date, timedelta 
+
+parser = argparse.ArgumentParser( description = "Create file lists" )
+
+parser.add_argument( "yr1yr2", help="start and end years", nargs=2 )
+parser.add_argument( "mm", help="run month", nargs=1, type=int )
+parser.add_argument( "-n","--ndays", help="steps between file names (default: 1)", default=1, type=int, nargs="?" )
+parser.add_argument( "-p","--prefix", help="output file name prefix (default: ungrib)", default="ungrib", nargs="?" )
+
+# parse the command line
+args = parser.parse_args()
+
+yr1, yr2 = map( int, args.yr1yr2 )
+mm = args.mm[0]
+ndays = args.ndays
+prefix = args.prefix
+
+yrs = range( yr1, yr2+1 )
+
+if yr1 == yr2:
+  ofn = prefix+"_list_%04d_%02d" % ( yr1, mm )
+else:
+  ofn = prefix+"_list_%04d-%04d_%02d" % ( yr1, yr2, mm )
+ofile = open( ofn, "w" )
+
+#extradays = [ "ungrib", "metgrid" ]
+extradays = [ "ungrib" ]
+dt=timedelta(1)
+#pdb.set_trace()
+for yy in yrs:
+  dpm = calendar.monthrange(yy, mm)[1]  # days per month
+  if prefix in extradays:
+    # include last day of previous month
+    today = 1
+    start_date = date( int(yy), int(mm), today )
+    new_date = start_date - dt
+    yyp = new_date.year
+    mmp = new_date.month
+    ddp = new_date.day
+    fprev = "./%04d/%04d%02d%02d" % ( yyp, yyp, mmp, ddp )
+    ofile.write( fprev+"\n" )
+
+  # all days in current month
+  for dd in range(1,dpm+1,ndays):
+    fd = "./%04d/%04d%02d%02d" % ( yy, yy, mm, dd )
+    ofile.write( fd+"\n" )
+
+  if prefix in extradays:
+    # include first day of next month
+#    pdb.set_trace()
+    today = dpm
+    start_date = date( int(yy), int(mm), today )
+    new_date = start_date + dt
+    yyn = new_date.year
+    mmn = new_date.month
+    ddn = new_date.day
+    fnext = "./%04d/%04d%02d%02d" % ( yyn, yyn, mmn, ddn )
+    ofile.write( fnext+"\n" )
+ofile.close()

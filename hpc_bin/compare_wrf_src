@@ -1,0 +1,131 @@
+#!/usr/bin/env python
+# compare_wrf_src
+# do a comparison of .F files in two WRF source directories.
+# where "modified" is different from "reference", a patch file
+# will be created in a work directory. the patch is applied with:
+#   patch -b -p9 < patch_file
+#    where "-p9" strips the first 9 "/" from the path name of the
+#    directory where the patch is being applied.
+#    you may need to play around with this number though!
+
+import pdb, os, commands
+
+# directory for reference files (old)
+orig_path = "/glade/u/home/dbr/wrf/src/v3.3/WRFV3"
+
+# directory for modified/comparison files (new)
+mod_path = "/glade/u/home/dbr/wrf/src/ccsm/WRFV3.3/SRC_CODE"
+
+# directory for patch files
+work_path = "/glade/u/home/dbr/scratch/wrf_diff"
+if not os.path.exists( work_path ):
+  os.makedirs( work_path )
+
+print "Directories:"
+print "Ref: "+orig_path
+print "Mod: "+mod_path
+print "Patch: "+work_path
+
+# source directories to check, ok if they don't exist
+dirlist = ('frame', 'dyn_em', 'phys', 'chem', 'share', 'da', 'external', 'main')
+
+# file pattern to find
+fpatt = "*.F"
+
+# file names for unique files
+unique_o = "unique_ref_list"
+unique_m = "unique_mod_list"
+
+# save current dir
+cdir = os.getcwd()
+
+# get list of reference files
+os.chdir( orig_path )
+flist_o = []
+for dn in dirlist:
+  if os.path.exists( dn ):
+    cmd = 'find '+dn+' -name '+fpatt
+    a = commands.getoutput( cmd )
+    b = a.split('\n')
+    flist_o.extend( b )
+
+# get list of modified/comparison files
+os.chdir( mod_path )
+flist_m = []
+for dn in dirlist:
+  if os.path.exists( dn ):
+    cmd = 'find '+dn+' -name '+fpatt
+    a = commands.getoutput( cmd )
+    b = a.split('\n')
+    flist_m.extend( b )
+
+print str(len(flist_o))+" originals, "+str(len(flist_m))+" modifieds"
+
+# process the reference list
+#os.chdir( orig_path )
+flist_o_new = []
+flist_patch = []
+for fn_o in flist_o:
+  if fn_o in flist_m:
+    fn1 = orig_path+"/"+fn_o
+#    fn1 = fn_o
+#    fn2 = mod_path+"/"+fn_o
+    fn2 = fn_o
+    # first check if files are different
+    cmd = "diff -q "+fn1+" "+fn2
+    a = commands.getoutput( cmd )
+    if len(a) > 0:  # files are probably different
+      b = a.rstrip()
+      c = b.split()
+      if c[-1] == "differ": # files are definitely different
+        print fn_o
+        flist_patch.append( fn_o )
+        ofn = fn_o.rstrip(".F")+".patch"
+        # build directory path for output file
+        ofn_lst = ofn.split('/')
+        odir1 = '/'.join( ofn_lst[:-1] )
+        odir2 = work_path+"/"+odir1
+        if not os.path.exists( odir2 ):
+          os.makedirs( odir2 )
+        fn3 = work_path+"/"+ofn
+        # create the patch file
+        cmd = "diff -u "+fn1+" "+fn2+" > "+fn3
+        os.system( cmd )
+    flist_m.remove( fn_o )
+  else:
+    flist_o_new.append( fn_o )
+
+# switch back to original directory
+os.chdir( cdir )
+
+print str(len(flist_patch))+" files were changed and need patching"
+
+# show unique files from reference source
+if len( flist_o_new ) > 0:
+  ofile = open( unique_o, "w" )
+  for fn_o in flist_o_new:
+    ofile.write( fn_o+"\n" )
+  print str(len(flist_o_new))+" unique files in reference directory"
+  print "See file "+unique_o+" for details"
+  ofile.close()
+else:
+  print "No unique reference files"
+
+# if there are still comparison files, check for ones
+# we expect to be different
+#pdb.set_trace()
+known_list = ( "frame/module_dm.F", "frame/module_state_description.F" )
+for knwn in known_list:
+  if knwn in flist_m:
+    flist_m.remove( knwn )
+
+# show unique files from comparison source
+if len( flist_m ) > 0:
+  ofile = open( unique_m, "w" )
+  for fn_m in flist_m:
+    ofile.write( fn_m+"\n" )
+  print str(len(flist_m))+" unique files in modified directory"
+  print "See file "+unique_m+" for details"
+  ofile.close()
+else:
+  print "No unique modified files"

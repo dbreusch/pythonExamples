@@ -1,0 +1,76 @@
+#!/usr/bin/env python
+# wrf_postproc
+# run wrf_postproc.ncl on a specific file
+# output goes to a directory matching yy/mm/dd of input file
+# 03/30/17, dbr, removed hardcoded dependence on home directory name
+
+import pdb, sys, os
+
+nargin = len(sys.argv)
+if nargin < 2:
+  print "Syntax:  wrf_postproc input_fn ensemble expname model branch"
+  print "  input_fn = name of wrfout file to be processed"
+  print "  ens = ensemble"
+  print "  expname = region name (gis, ant)"
+  print "  model = model name (erai, cesmle)"
+  print "  branch = time period (e.g., historical)"
+  sys.exit()
+
+# get command line args
+input_fn = sys.argv[1]
+enss     = sys.argv[2]
+ens      = int( enss )
+expname  = sys.argv[3]
+model    = sys.argv[4]
+branch   = sys.argv[5]
+
+# get home directory
+home = os.path.expanduser("~")
+
+# ncl command
+ncl_cmd = home+"/wrf/ncl/wrfout_postproc.ncl"
+
+# split filename and gather yy/mm/dd info
+dir_tmp = os.path.dirname( input_fn )
+file_in = os.path.basename( input_fn )
+file_yy = file_in[ 11:15 ]
+file_mm = file_in[ 16:18 ]
+file_dd = file_in[ 19:21 ]
+
+# convert input dir_in to working dir_in
+a = dir_tmp.split('/')
+if len(a) < 3:
+  print "Input file name too short, missing parent directories"
+  sys.exit()
+dir1 = a[-2]
+dir2 = a[-1]
+if ens > 0:
+  base = home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wrf/run/"+enss+"/"
+else:
+  base = home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wrf/run/"
+dir_in = base+dir1+"/"+dir2+"/"
+
+# output names
+if ens > 0:
+  dir_out = home+"/scratch/wrf/%s_%s/%s/wrf/postproc/%s/%s/%s%s%s/" % (expname, model, branch, enss, file_yy, file_yy, file_mm, file_dd)
+else:
+  dir_out = home+"/scratch/wrf/%s_%s/%s/wrf/postproc/%s/%s%s%s/" % (expname, model, branch, file_yy, file_yy, file_mm, file_dd)
+file_out = file_in+".nc"
+ofn = dir_out+file_out
+if os.path.exists( ofn ):
+  os.unlink( ofn )
+
+if not os.path.exists( dir_out ):
+  try:
+    os.makedirs( dir_out )
+  except OSError:
+    pass
+#    print "Caught makedir of existing dir "+dir_out
+
+arg1 = "'dir_in=\""+dir_in+"\"'"
+arg2 = "'file_in=\""+file_in+"\"'"
+arg3 = "'dir_out=\""+dir_out+"\"'"
+arg4 = "'file_out=\""+file_out+"\"'"
+cmd = "ncl "+arg1+" "+arg2+" "+arg3+" "+arg4+" "+ncl_cmd
+#pdb.set_trace()
+os.system( cmd )

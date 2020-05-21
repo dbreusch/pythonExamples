@@ -1,0 +1,188 @@
+#!/usr/bin/env python
+# run_wrf_postproc:
+# call a script to do postprocessing of wrf files
+# called script is forked to a separate process with up to 16 processes
+# active at a time (limit set by var maxproc).
+# I would normally run 32 processes in the regular queue but that queue
+# includes wall-clock time in the GAU calculations and thus jobs cost
+# ~30x more!  share queue guidelines prefer << 32 processors.
+#
+# 5/29/18, changed maxproc (#tasks) to argument
+# 12/8/15, converted to argparse
+# 12/1/15, added region/model/period support
+import pdb, os, sys, glob
+#import commands
+import argparse
+
+# -----------------------------------------------------------
+# Function to fork a script call with arg ifn
+# -----------------------------------------------------------
+def forkprocess( ifn, child_cmd, ens, expname, model, branch ):
+  pid = os.fork()
+  if pid == 0:
+    # child
+    child_path = "/glade/u/home/dbr/bin/"
+    full_path = os.path.join( child_path, child_cmd )
+    if not os.path.exists( full_path ):
+      print "Script "+full_path+" not found.  Exiting..."
+      sys.exit()
+    os.execv( child_path+child_cmd, [child_cmd, ifn, ens, expname, model, branch] )
+    assert False, 'Error starting child program'
+  else:
+    # parent
+    return pid
+# -----------------------------------------------------------
+
+# Main Code Begins
+#pdb.set_trace()
+
+# set up arguments parser
+parser = argparse.ArgumentParser( description = "run WRF postprocessing job" )
+parser.add_argument( "fnlist", help="file of wrfout files to be processed", nargs=1 )
+parser.add_argument( "-s","--script", help="name of script to run on each file (defaults to wrf_postproc)", nargs="?", default="wrf_postproc" )
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-v","--verbose", help="provide some debug output", action="store_true")
+parser.add_argument( "-d","--debug", help="enable pdb", action="store_true")
+parser.add_argument( "-M","--month", help="month to process (default: 7)", type=int, nargs="?", default="7" )
+parser.add_argument( "-T","--tasks", help="maximum number of concurrent tasks (default: 12)", type=int, nargs="?", default="12" )
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+debug = args.debug
+if debug:
+  pdb.set_trace()
+
+fnlist = args.fnlist[0]
+script_cmd = args.script
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+verbose = args.verbose
+mm = args.month
+maxproc = args.tasks
+if maxproc > 40:
+  maxproc = 40  # absolute ceiling
+print "Tasks="+str(maxproc)
+
+if verbose:
+  print "fnlist="+fnlist
+  print "Script="+script_cmd
+  print "Ensemble="+enss
+  print "Experiment="+expname
+  print "Branch="+branch
+  print "Model="+model.upper()
+  print "Tasks="+str(maxproc)
+
+period = sys.argv[5]
+
+# define how long to wait between "process done" checks
+waitint = 10 # seconds
+
+# define how many times to check before deciding to quit
+bailout = 200
+
+# changed to cmd line arg 5/29/18
+# define max # of concurrent tasks
+#maxproc = 12
+#maxproc = 20
+
+# code to either use an existing list of files or create one dynamically
+p = fnlist.split('_')
+if p[0] == 'new':
+  # create a list dynamically
+  home = os.path.expanduser("~")
+  cdir = os.getcwd()
+  yy = p[1]
+  if ens > 0:
+    rdir = home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wrf/run/"+enss+"/"+yy
+  else:
+    rdir = home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wrf/run/"+yy
+  os.chdir( rdir )
+  mms = '%02d' % mm
+  monpatt = yy+mms+"*"
+  rdirlist = glob.glob( rdir+"/"+monpatt )
+#  pdb.set_trace()
+
+  # assume only working with one run dir (will have to modify if different)
+  dd = rdirlist[0].split('/')[-1]
+  os.chdir( dd )
+
+  ofn = "wrfout_"+"_".join( p[ 1: ] )
+  cmd = 'find ../.. -name "wrfout_*" | grep '+dd+' | sort > '+cdir+"/"+ofn
+  os.system( cmd )
+  fnlist = ofn
+  os.chdir( cdir )
+
+# read in complete list of files to process
+if not os.path.exists( fnlist ):
+  print "Input file "+fnlist+" not found.  Exiting..."
+  sys.exit()
+ifile = open( fnlist, "r" )
+file_list = ifile.readlines()
+ifile.close()
+flen = len(file_list)
+
+# process the files by forking script for each
+pid_list = []
+for fn in file_list:
+  fn = fn.rstrip()
+  if fn[0] == "#":
+    continue
+  if len(pid_list) < maxproc:
+    pid = forkprocess( fn, script_cmd, enss, expname, model, branch )
+    pid_list.append( pid )
+  else:
+    k = 0
+    while True: # wait for a process to finish so a new one can be started
+      sys.stdout.flush()
+      (pid, status) = os.waitpid( -1, os.WNOHANG )
+      if pid > 0:
+        # child pid has finished, remove from list
+        print str(pid)+" finished"
+        pid_list.remove( pid )
+        # start the next one
+        pid = forkprocess( fn, script_cmd, enss, expname, model, branch )
+        pid_list.append( pid )
+        break
+      else:
+        # pause before trying again
+        os.system( "sleep "+str(waitint) )
+        k += 1
+      if k > bailout: # bailout if too many checks
+        print "Wait on process to finish timed out (1)"
+        sys.exit("Wait on process to finish timed out (1)")
+
+# done creating new processes, now wait for them to finish
+k = 0
+while len(pid_list) > 0:
+  (pid, status) = os.waitpid( -1, os.WNOHANG )
+  if pid > 0:
+    # child pid has finished, remove from list
+    print str(pid)+" finished"
+    pid_list.remove( pid )
+  else:
+    os.system( "sleep "+str(waitint) )
+    k += 1
+  if k > bailout: # bailout if too many checks
+    print "Wait on process to finish timed out (2)"
+    sys.exit("Wait on process to finish timed out (2)")
+    sys.exit()

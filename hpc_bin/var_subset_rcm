@@ -1,0 +1,123 @@
+#!/usr/bin/env python
+# use NCO to subset PWRF vars and rename (as needed) to standard format
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, commands
+
+nargin = len(sys.argv)
+if nargin < 9:
+  print "Usage: var_subset_rcm varlist_file diryy dirmm dirdd fileyy filemm filedd filemm"
+  print "  varlist_file = file (created by ncl_varlist) of vars to process"
+  print "  diryy, dirmm, dirdd = year, month, day of input/output dir"
+  print "  fileyy, filemm, filedd, file hh = year, month, day, hour of input/output file"
+  sys.exit()
+
+# get vars-to-process list
+varcat = sys.argv[1]
+
+# get directory date info
+diryy, dirmm, dirdd = map(int, sys.argv[2:5])
+
+# get file date info
+fileyy, filemm, filedd, filehh = map(int, sys.argv[5:9])
+
+# project name for output subdir
+#proj = "erai"
+#proj = "pwrf"
+
+# base directory names
+root_dir = "/lustre/janus_scratch/dbr/wrf"
+#in_dir = root_dir+"/run"
+in_dir = root_dir+"/sub_spatial"
+out_dir = root_dir+"/sub_var"
+
+# set up directory/file patterns and pieces
+dir1patt = "%4d"
+dir2patt = "%4d%02d%02d"
+filepatt = "wrfout_d02_%4d-%02d-%02d_%02d:00:00"
+
+dir1 = dir1patt % diryy
+dir2 = dir2patt % (diryy, dirmm, dirdd)
+fn   = filepatt % (fileyy, filemm, filedd, filehh)
+
+ifn = in_dir+"/"+dir1+"/"+dir2+"/"+fn
+odir = out_dir+"/"+dir1+"/"+dir2
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+dir2
+
+ofn = odir+"/"+fn
+
+# define variables of interest
+ifile = open( varcat, "r" )
+varlist = ifile.readlines()
+ifile.close()
+
+# build list of vars to subset
+rename_list = []
+allvarslist = []
+for ln in varlist:
+  files = ln.split()
+  custname = files[0]
+  if custname.startswith("#"):
+    continue
+  defname  = files[1]
+  longname = files[2]
+  allvarslist.append( longname )
+  if longname <> custname:
+    rename_list.append([ defname, custname ])
+
+# use ncks to subset vars to new file
+nco_cmd = "ncks -O -v "
+for v in allvarslist:
+  nco_cmd = nco_cmd+v
+  if not v == allvarslist[-1]:
+    nco_cmd = nco_cmd+","
+nco_cmd = nco_cmd+" "+ifn+" -o "+ofn
+os.system( nco_cmd )
+
+# use ncrename to do desired var renames
+nco_cmd = "ncrename -O"
+var_arg = ""
+dim_arg = ""
+for rnm in rename_list:
+  oldname = rnm[0]
+  newname = rnm[1]
+  var_arg = var_arg+" -v "+oldname+","+newname
+  if (newname == "LAT") or (newname == "LON"):
+    if (oldname == "XLAT"):
+      continue
+    if (oldname == "XLONG"):
+      continue
+    dim_arg = dim_arg+" -d "+oldname+","+newname
+#pdb.set_trace()
+nco_cmd = nco_cmd+dim_arg+var_arg+" "+ofn
+os.system( nco_cmd )
+
+########## old var selection lists
+## dimensions and miscellany (11)
+#dimlist = ["Times", "XLAT", "XLONG", "XLAT_U", "XLONG_U", "XLAT_V", "XLONG_V", "ZNU", "ZNW", "HGT", "LANDMASK" ]
+#
+## surface-only meteorology (15)
+#sfcmetlist = ["T2", "U10", "V10", "SEAICE", "SST", "Q2", "TH2", "SNOW", "SNOWH", "TSK", "RAINC", "RAINSH", "RAINNC", "SNOWNC", "PSFC" ]
+##sfcmetlist = ["T2", "U10", "V10", "SEAICE", "SST" ]
+#
+## upper air meteorology (12)
+##uametlist = ["U", "V", "PH", "PHB", "P", "PB", "QVAPOR", "QCLOUD", "QRAIN", "QICE", "QSNOW", "CLDFRA" ]
+##uametlist = ["U", "V", "PH", "PHB", "P", "PB" ]
+#
+## energy balance-related (25)
+#eblist = ["LH", "HFX", "QFX", "SWDOWN", "GLW", "OLR", "NOAHRES", ...
+#          "ACHFX", "ACLHF", ...
+#          "ACSWUPT", "ACSWUPTC", "ACSWDNT", "ACSWDNTC", ...
+#          "ACSWUPB", "ACSWUPBC", "ACSWDNB", "ACSWDNBC", ...
+#          "ACLWUPT", "ACLWUPTC", "ACLWDNT", "ACLWDNTC", ...
+#          "ACLWUPB", "ACLWUPBC", "ACLWDNB", "ACLWDNBC", ...
+#         ]
+##eblist = ["LH", "HFX", "QFX", "ACHFX", "ACLHF", "SWDOWN", "GLW", "OLR", "NOAHRES"]
+#
+##allvarslist = dimlist + sfcmetlist + uametlist + eblist
+#allvarslist = dimlist + sfcmetlist + eblist

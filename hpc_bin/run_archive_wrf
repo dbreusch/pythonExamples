@@ -1,0 +1,210 @@
+#!/usr/bin/env python
+# run_archive_wrf:
+# create jobs to run archive real/wrf script.
+# includes support for "postproc" and "ccsm" files through arg subdir.
+# number of jobs created is set by var njobs (currently 8 for wrf, 4 for pp)
+
+import pdb, sys, os, commands, math, tempfile, argparse
+from datetime import time
+#pdb.set_trace()
+
+# set up argument parser
+parser = argparse.ArgumentParser( description = "Run WRF file archiver" )
+
+# define arguments
+parser.add_argument( "script_cmd", help="script to run" )
+parser.add_argument( "dirlist", help="directories to process" )
+parser.add_argument( "-p","--prefix", help="prefix for batch file name/job name (default: archwrf)", nargs="?", default="archwrf" )
+parser.add_argument( "-S","--submit", help="automatically submit batch job (default y)", nargs="?", default="y" )
+parser.add_argument( "-J","--jnum", help="starting number suffix for jobs (default 1)", nargs="?", default=1 )
+parser.add_argument( "-d","--subdir", help="archive sub-directory", nargs="?", default="run")
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+script_cmd = args.script_cmd
+dirlist = args.dirlist
+prefix = args.prefix
+submit = args.submit
+jnum = int(args.jnum)
+subdir = args.subdir
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+
+# set minutes-per-dir var
+if model == "erai":  # main wrf dir
+  if subdir == "run":
+#    minperdir = 15
+    minperdir = 1.5
+  if subdir == "postproc":
+    minperdir = 2
+else:
+  if subdir == "run":
+#    minperdir = 180
+    minperdir = 30
+  if subdir == "postproc":
+    minperdir = 0.5
+
+# job account
+job_acct = "UNMT0001"
+
+# -----------------------------------
+# build lists of archive_wrf commands
+# -----------------------------------
+
+# read in complete list of directories to process
+if not os.path.exists( dirlist ):
+  print "Input file "+dirlist+" not found.  Exiting..."
+  sys.exit()
+ifile = open( dirlist, "r" )
+file_list = ifile.readlines()
+ifile.close()
+file_list.reverse()
+flen = len(file_list)
+
+# number of jobs to create, list of files is split over these jobs
+if model == "erai":
+  if subdir == "run":
+    njobs = 1   # was 8
+  if subdir == "postproc":
+    njobs = 1
+else:
+  if subdir == "run":
+#    njobs = flen  # one job per directory since they're so big
+    njobs = 3 # tradeoff between runtime and # of jobs
+  if subdir == "postproc":
+#    njobs = 4
+    njobs = 1
+njobs2 = njobs + 1
+
+# open temporary files
+ofiles = []
+ndirs = [0] * njobs2
+for n in range(1,njobs2):
+  ofile = tempfile.NamedTemporaryFile( delete=False )
+  ofiles.append( ofile )
+
+# list-of-dirs file creation loop
+while flen > 0:
+  i = 0
+  for ofile in ofiles:
+    if len(file_list) == 0:
+      break
+    fn = file_list.pop().rstrip()
+    flen = len(file_list)
+    if fn[0] == "#":
+      continue
+
+    lst = fn.split('/')
+    diryy = lst[1]
+    dirstr = lst[2]
+    dirmm = dirstr[4:6]
+    dirdd = dirstr[6:].rstrip()
+    ofile.write( script_cmd+" " )
+    ofile.write( diryy+dirmm+dirdd )
+    ofile.write( " -m "+model )
+    ofile.write( " -d "+subdir )
+    ofile.write( " -b "+branch )
+    ofile.write( " -e "+expname )
+    ofile.write( " -E "+str(ens) )
+    ofile.write( " \n" )
+
+    ndirs[i] += 1
+    i += 1
+
+    if flen == 0:
+      break
+
+# close temporary files
+for ofile in ofiles:
+  ofile.close()
+
+# ----------------------
+# now build the jobs
+# ----------------------
+jname = prefix
+#queue = "hpss"
+queue = "casper"
+#queue = "geyser"
+#queue = "caldera"
+#wrf_root_dir = "/glade/p/work/dbr/wrf"
+wrf_root_dir = "/glade/work/dbr/wrf"
+cust_dir = wrf_root_dir+"/gis_cesmle/src/custom"
+
+for n in range(1,njobs2):
+  # calculate estimated wallclock time
+  nd = ndirs[ n-1 ]
+  minperjob = minperdir * nd
+#  pdb.set_trace()
+  if model == "erai":
+    if subdir == "run":
+      if minperjob < 15:
+        minperjob = 15
+  wc_hh = int( math.floor( minperjob / 60 ) )
+  if wc_hh > 24:
+    print "Estimated wall clock time > 24 hours: "+str(wc_hh)
+    print "Reduce file list or estimated time per job"
+    sys.exit()
+  wc_mm = int( minperjob % 60 )
+  wc_t = time( wc_hh, wc_mm )
+  wc_time = wc_t.strftime( "%H:%M:%S")
+#  if model == "erai":  # note that this overrides code above!
+#    if subdir == "run":
+##      wc_time = "03:00"
+#      wc_time = "01:00"
+  print "Estimated time = "+wc_time
+
+  # create job filenames
+  batch_root = "%s_%03d" % (jname, jnum)
+  batch_fn_pro = batch_root+"_pro"
+  batch_fn_epi = batch_root+"_epi"
+  fn_job = batch_root
+
+  # create (edit) batch_prolog
+  cmd = "sed -e s/BASE_DATESTR/"+fn_job+"/g -e s/CLOCK/"+wc_time+"/g -e s/QUEUE/"+queue+"/g -e s/ACCT/"+job_acct+"/g < "+cust_dir+"/batch_prolog > "+batch_fn_pro
+  os.system( cmd )
+  os.system( "echo module load python >> "+batch_fn_pro )
+  os.system( "echo ' ' >> "+batch_fn_pro )
+
+  # create (copy) batch_epilog
+  cmd = "cp "+cust_dir+"/batch_epilog "+batch_fn_epi
+  os.system( cmd )
+
+# put pieces together
+  archive_fn = ofiles[n-1].name
+  cmd = "cat "+batch_fn_pro+" "+archive_fn+" "+batch_fn_epi+" > "+fn_job
+  os.system( cmd )
+  print "Batch job in file "+fn_job
+  if submit == "y":
+#    cmd = "bsub -g "+jobgroup+" < "+fn_job
+    cmd = "bsub  < "+fn_job
+    os.system( cmd )
+  jnum += 1
+
+# loop clean up
+  os.unlink( batch_fn_pro )
+  os.unlink( batch_fn_epi )
+
+# final clean up
+for ofile in ofiles:
+  os.unlink( ofile.name )

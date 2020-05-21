@@ -1,0 +1,160 @@
+#!/usr/bin/env python
+# use CDO/NCO to create spatial subset from global (i.e., ERA-I) file
+# points outside desired region *are* removed.
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, commands
+
+nargin = len(sys.argv)
+if nargin < 9:
+  print "Usage: spatial_subset_global file_type region diryy dirmm dirdd fileyy filemm filedd filemm [indir]"
+  print "  file_type = sfc | ua | uv | fc"
+  print"               used to define file pattern"
+  print "  region = minlat,maxlat,minlon,maxlon"
+  print "  diryy, dirmm, dirdd = year, month, day of input/output dir"
+  print "  fileyy, filemm, filedd, file hh = year, month, day, hour of input/output file"
+  print "  indir = source directory for input files [defaults to erai grb dir]"
+  print "          names are relative to /lustre/janus_scratch/dbr/data/erai unless"
+  print "          they start with a /"
+  sys.exit()
+
+# get type of input file
+file_type = sys.argv[1]
+if file_type not in ("sfc", "ua", "uv", "fc"):
+  print "filetype "+file_type+" not recognized"
+  sys.exit()
+
+# get region boundaries
+minlat, maxlat, minlon, maxlon = sys.argv[2].split(',')
+
+# get directory date info
+if file_type in ("sfc", "ua", "uv"):
+  diryy, dirmm, dirdd = map(int, sys.argv[3:6])
+else:
+  diryy = int( sys.argv[3] )
+  dirmm = sys.argv[4] # this will be a string!
+
+if file_type in ("sfc", "ua", "uv"):
+  # get file date info (but ignore args for forecast files)
+  fileyy, filemm, filedd, filehh = map(int, sys.argv[6:10])
+
+# base directory names
+root_dir = "/lustre/janus_scratch/dbr/data/erai"
+if nargin < 11:
+  in_dir = root_dir+"/grb"
+else:
+  arg_dir = sys.argv[10]
+  if arg_dir.startswith('/'):
+    in_dir = arg_dir
+  else:
+    in_dir = root_dir+"/"+arg_dir
+
+if file_type in ("sfc", "ua", "uv"):
+  out_dir = root_dir+"/sub_spatial"
+else:
+  out_dir = root_dir+"/sub_spatial_fc"
+
+# set up file patterns and create filename
+if file_type in ("sfc", "ua", "uv"):
+  if "sfc" in file_type:
+    filepatt = "ei.oper.an.sfc.regn128sc.%04d%02d%02d%02d"
+  elif "ua" in file_type:
+    filepatt = "ei.oper.an.pl.regn128sc.%04d%02d%02d%02d"
+  elif "uv" in file_type:
+    filepatt = "ei.oper.an.pl.regn128uv.%04d%02d%02d%02d"
+  fn   = filepatt % (fileyy, filemm, filedd, filehh)
+elif "fc" in file_type:
+  filepatt = "ei.oper.fc.sfc.regn128sc.%s.%04d"
+  fn   = filepatt % (dirmm, diryy)
+else:
+  print "Unknown file type provided"
+  sys.exit()
+
+# set up directory patterns and create dirnames
+dir1patt = "%4d"
+dir2patt = "%4d%02d%02d"
+dir1 = dir1patt % diryy
+if file_type in ("sfc", "ua", "uv"):
+  dir2 = dir2patt % (diryy, dirmm, dirdd)
+  xfn = in_dir+"/"+dir1+"/"+dir2+"/"+fn
+else:
+  xfn = in_dir+"/"+dir1+"/"+fn
+
+ncl_cvt = 0
+#pdb.set_trace()
+if not os.path.exists( xfn+".nc" ):
+  if not os.path.exists( xfn+".grb" ):
+    print "Input file not found with either .nc or .grb extension"
+    sys.exit()
+  else:
+    ifn = xfn+".grb"
+    ncl_dir = "/lustre/janus_scratch/dbr/tmp"
+    if file_type in ("sfc", "ua", "uv"):  # convert to netcdf with NCL
+      ncl_cmd = "ncl_convert2nc "+ifn+" -o "+ncl_dir
+      os.system( ncl_cmd )
+      ifn = ncl_dir+"/"+fn+".nc"
+    elif "fc" in file_type:
+      ncl_cmd = "ncl_convert2nc "+ifn+" -u initial_time0_hours -U time -o "+ncl_dir
+      os.system( ncl_cmd )
+      tempfn = ncl_dir+"/"+fn+"temp.nc"
+      ifn = ncl_dir+"/"+fn+".nc"
+      cmd = "mv "+ifn+" "+tempfn
+      os.system( cmd )
+      cmd = "cdo selgrid,2 "+tempfn+" "+ifn
+      os.system( cmd )
+      os.unlink( tempfn )
+    ncl_cvt = 1
+else:
+  ifn = xfn+".nc"
+
+if file_type in ("sfc", "ua", "uv"):
+  odir = out_dir+"/"+dir1+"/"+dir2
+else:
+  odir = out_dir+"/"+dir1
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    if file_type in ("sfc", "ua", "uv"):
+      print "Caught makedir of existing dir "+dir2
+    else:
+      print "Caught makedir of existing dir "+dir1
+
+# reuse xfn for a new filename related to CDO
+xfn = odir+"/"+fn
+tempfn = xfn+"_temp.nc"
+ofn = xfn+".nc"
+
+# use CDO to subset all vars spatially
+#if file_type in ("sfc", "ua", "uv"):
+cdo_cmd = "cdo -f nc sellonlatbox,"+minlon+","+maxlon+","+minlat+","+maxlat+" "+ifn+" "+tempfn
+#else:
+#  cdo_cmd = "cdo -f nc -t ecmwf sellonlatbox,"+minlon+","+maxlon+","+minlat+","+maxlat+" "+ifn+" "+tempfn
+os.system( cdo_cmd )
+
+os.system("mv "+tempfn+" "+ofn)
+
+# add global attributes for subset range
+cmd = "ncatted -O -a minlat,global,o,f,"+minlat+" "+ofn
+os.system( cmd )
+
+# add global attributes for subset range
+cmd = "ncatted -O -a maxlat,global,o,f,"+maxlat+" "+ofn
+os.system( cmd )
+
+# add global attributes for subset range
+cmd = "ncatted -O -a minlon,global,o,f,"+minlon+" "+ofn
+os.system( cmd )
+
+# add global attributes for subset range
+cmd = "ncatted -O -a maxlon,global,o,f,"+maxlon+" "+ofn
+os.system( cmd )
+
+# add history to reflect subset processing
+cmd = "ncatted -O -a history,global,a,c,'Processing with spatial_subset_global complete\n' "+ofn
+os.system( cmd )
+
+# clean up temp file if necessary
+if ncl_cvt == 1:
+  os.unlink( ifn )

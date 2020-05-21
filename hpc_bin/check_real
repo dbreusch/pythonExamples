@@ -1,0 +1,168 @@
+#!/usr/bin/env python
+# check real results:
+# - number of output files
+# - end of real_*.out
+# - rsl_save/real_rsl.out.0000
+
+# 09/25/17, switched to argparse; added CESMLE support
+# 04/04/17, removed hardcoded dependence on home directory name
+# 02/10/17, updated for gismelt and yellowstone
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, glob, os, commands
+import argparse
+
+# -----------------------------------------------------------
+#nargin = len( sys.argv )
+#if nargin < 2:
+#  yearpatt = "*"
+#else:
+#  yearpatt = sys.argv[1]
+#if nargin < 3:
+#  monpatt = "*"
+#else:
+#  monpatt = sys.argv[2]
+# -----------------------------------------------------------
+
+# set up arguments parser
+parser = argparse.ArgumentParser( description = "check on real jobs" )
+parser.add_argument( "-y","--year", help="year to process", nargs="?", default="x" )
+parser.add_argument( "-m","--month", help="month to process (default: all)", nargs="?", default="x" )
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-M","--model", help="model name (default: erai)", nargs="?", default="erai" )
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+yearpatt = args.year
+if yearpatt == "x":
+  yearpatt = '*'
+
+monpatt = args.month
+if monpatt == "x":
+  monpatt = '*'
+
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+
+# -----------------------------------------------------------
+
+# get home directory
+home = os.path.expanduser("~")
+
+rdir_root=home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wrf/run"
+if ens > 0:
+  rdir_root = rdir_root+"/"+enss
+
+fdir_root=rdir_root
+cdir=os.getcwd()
+#file_patterns = ['wrfout*', 'wrfinput*','wrflowinp*','wrfbdy*']
+file_patterns = ['wrfinput_d01','wrflowinp_d01','wrfbdy_d01']
+
+rdirpatt = rdir_root+"/"+yearpatt
+rdirlist = glob.glob( rdirpatt )
+if len(rdirlist)<1:
+  print "1: No files found, check year pattern"
+  print rdirpatt
+  sys.exit()
+if len(rdirlist)>1:
+  rdirlist.sort()
+
+fdirpatt = fdir_root+"/"+yearpatt
+fdirlist = glob.glob( fdirpatt )
+if len(fdirlist)<1:
+  print "2: No files found, check year pattern"
+  print fdirpatt
+  sys.exit()
+if len(fdirlist)>1:
+  fdirlist.sort()
+
+for index in range(len(rdirlist)):
+#  rdirmpatt = rdir_root+"/"+yearpatt+"/????"+monpatt
+  rdirmpatt = rdir_root+"/"+yearpatt
+  rdirmlist = glob.glob( rdirmpatt )
+  if len(rdirmlist)<1:
+    print "3: No files found, check year/month pattern"
+    print rdirmpatt
+    sys.exit()
+  if len(rdirmlist)>1:
+    rdirmlist.sort()
+
+  fdirmpatt = fdir_root+"/"+yearpatt+"/????"+monpatt
+  fdirmlist = glob.glob( fdirmpatt )
+  if len(fdirmlist)<1:
+    print "4: No files found, check year/month pattern"
+    print fdirmpatt
+    sys.exit()
+  if len(fdirmlist)>1:
+    fdirmlist.sort()
+
+  index3 = range(len(fdirmlist));
+  index3_count = 0
+  for index2 in range(len(fdirmlist)):
+    rl = fdirmlist[index2].split('/')
+    d = rl[-1]
+#    d2 = fdir_root+"/"+yearpatt+"/"+d
+#    pdb.set_trace()
+    d2 = glob.glob( fdir_root+"/"+yearpatt+"/"+d )[0]
+    if d2 not in fdirmlist:
+      print d+" not run yet, skipping"
+      continue
+
+    if not os.path.isdir( fdirmlist[index3[index3_count]] ):
+      index3_count += 1
+      continue
+    os.chdir( fdirmlist[index3[index3_count]] )
+    nf = 0
+    for fn in file_patterns:
+      if os.path.exists( fn ):
+        nf += 1
+    index3_count += 1
+
+    os.chdir( fdirmlist[index2] )
+    fpatt="real_*.out"
+    gr = glob.glob( fpatt )
+    if len(gr) > 0:
+      if len(gr) > 1:
+        gr.sort(reverse=True)
+      cmd="tail -2 "+gr[0]+" | head -1"
+      r=commands.getoutput( cmd )
+      if "Job ended" not in r:
+        r = "Job in progress..."
+    else:
+      r=" "
+
+    cmd = "tail -1 rsl_save/real_rsl.out.0000"
+    aa = commands.getoutput( cmd )
+    if "cannot open" in aa:
+      st = " "
+    else:
+      ww = aa.split(' ')
+      if "INIT" in ww[-1]:
+        st = ww[-4]
+      else:
+        st = "Error?"
+
+    print d+" "+str(nf)+" "+r+" "+st
+  break

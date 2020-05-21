@@ -1,0 +1,139 @@
+#!/usr/bin/env python
+# fc_yy_to_mm2
+# use CDO/NCO to create monthly files from annual forecast files
+# 6/11/12, dbr, copied from fc_yy_to_mm, changed to only use one year
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, commands, random, glob
+#pdb.set_trace()
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Usage: fc_yy_to_mm2 year varname [indir]"
+  print "  year = year of Jan in Nov-Dec-Jan-Feb"
+  print "  varname = which forecast var (e.g., slhf_147)"
+  print "  indir = source directory for input files [defaults to erai fc_flat dir]"
+  print "          names are relative to /lustre/janus_scratch/dbr/data/erai unless"
+  print "          they start with a /"
+  sys.exit()
+
+# get year info
+year2 = int( sys.argv[1] )
+#year1 = year2 - 1
+
+# get varname info
+varname = sys.argv[2]
+
+# base directory names
+root_dir = "/lustre/janus_scratch/dbr/data/erai"
+if nargin < 4:
+  in_dir = root_dir+"/fc_flat"
+else:
+  arg_dir = sys.argv[3]
+  if arg_dir.startswith('/'):
+    in_dir = arg_dir
+  else:
+    in_dir = root_dir+"/"+arg_dir
+
+out_dir = root_dir+"/fc_monthly"
+
+# months and days that define start/end of season
+#seasmon1 = 11
+seasmon1 = 2
+seasday1 = 1
+seasmon2 = 2
+seasday2 = 29
+
+# set up file pattern and create filenames
+filepatt = "ei.oper.fc.sfc.regn128sc.%s.%04d"
+#fn1   = filepatt % (varname, year1)
+fn2   = filepatt % (varname, year2)
+
+# set up directory pattern and create dirnames
+dirpatt = "%4d"
+#dir1 = dirpatt % year1
+dir2 = dirpatt % year2
+
+# create full path filename for input files
+#xfn1 = in_dir+"/"+dir1+"/"+fn1
+xfn2 = in_dir+"/"+dir2+"/"+fn2
+#ifn1 = xfn1+".nc"
+ifn2 = xfn2+".nc"
+
+#xlist = [ xfn1, xfn2 ]
+xlist = [ xfn2 ]
+for xfn in xlist:
+  if not os.path.exists( xfn+".nc" ):
+    print "Input file not found with .nc extension"
+    print xfn
+    sys.exit()
+
+# create output dir(s) if necessary
+odir = out_dir+"/"+dir2
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+dir2
+
+# create temp and output filenames
+xfn = odir+"/"+fn2
+tempfn1 = xfn+"_temp1.nc"
+tempfn2 = xfn+"_temp2.nc"
+ofn = xfn+".nc"
+
+## 1) merge year1 and year2, with NCO
+# 1) copy input to temp file
+#cmd = "ncrcat -O "+ifn1+" "+ifn2+" "+tempfn1
+cmd = "cp "+ifn2+" "+tempfn1
+os.system( cmd )
+
+# 2) select the season, with CDO
+datepatt1 = "%d-%02d-%02dT00:00"
+#date1 = datepatt1 % (year1, seasmon1, seasday1 )
+date1 = datepatt1 % (year2, seasmon1, seasday1 )
+datepatt2 = "%d-%02d-%02dT23:59"
+date2 = datepatt2 % (year2, seasmon2, seasday2 )
+
+cmd = "cdo seldate,"+date1+","+date2+" "+tempfn1+" "+tempfn2
+os.system( cmd )
+
+# 3) split season into monthly files, with CDO
+randval = random.randint( 100000, 999999 )
+pid = os.getpid()
+monfn = odir+"/month"+str(pid)+"_"+str(randval)+"_"
+cmd = "cdo splitmon "+tempfn2+" "+monfn
+os.system( cmd )
+
+# 4) move new monthly files into monthly dirs
+dirpatt = "%d%s"
+filelist = glob.glob( monfn+"*" )
+for ff in filelist:
+  # first, get the month and create a directory for it, if necessary
+  s1 = ff.split("_")[-1]
+  mm = s1.split(".")[0]
+  mmdir = dirpatt % ( year2, mm )
+  mmodir = odir+"/"+mmdir
+  if not os.path.exists( mmodir ):
+    try:
+      os.makedirs( mmodir )
+    except OSError:
+      print "Caught makedir of existing dir "+mmdir
+
+  # second, build new output file name
+  ofn_mm = mmodir+"/"+fn2+mm+".nc"
+
+  # third, move file to new location/name
+  cmd = "mv "+ff+" "+ofn_mm
+  os.system( cmd )
+
+  # last, add history to reflect processing
+  cmd = "ncatted -O -a history,global,a,c,'Processing with fc_yy_to_mm complete\n' "+ofn_mm
+  os.system( cmd )
+
+# clean up temp files, if necessary
+if os.path.exists( tempfn1 ):
+  os.unlink( tempfn1 )
+if os.path.exists( tempfn2 ):
+  os.unlink( tempfn2 )

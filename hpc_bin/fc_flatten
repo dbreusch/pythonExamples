@@ -1,0 +1,123 @@
+#!/usr/bin/env python
+# use CDO/NCO to create "flat" forecast file from NCL-created forecast files.
+# i.e., switch from t1(fc1,fc2), t2(fc1,fc2)... to t1(fc1), t2(fc2)...
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, commands
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Usage: fc_flatten yy varname [indir]"
+  print " Convert NCL-created forecast files to flat files"
+  print " Output to directory fc_flat"
+  print "  yy = year of input file"
+  print "  varname = which forecast var (e.g., slhf_147)"
+  print "  indir = source directory for input files [defaults to erai sub_spatial_fc dir]"
+  print "          names are relative to /lustre/janus_scratch/dbr/data/erai unless"
+  print "          they start with a /"
+  sys.exit()
+
+# get year info
+year = int( sys.argv[1] )
+
+# get varname info
+varname = sys.argv[2]
+
+# base directory names
+root_dir = "/lustre/janus_scratch/dbr/data/erai"
+if nargin < 4:
+  in_dir = root_dir+"/sub_spatial_fc"
+else:
+  arg_dir = sys.argv[3]
+  if arg_dir.startswith('/'):
+    in_dir = arg_dir
+  else:
+    in_dir = root_dir+"/"+arg_dir
+
+out_dir = root_dir+"/fc_flat"
+
+# set up file pattern and create filename
+filepatt = "ei.oper.fc.sfc.regn128sc.%s.%04d"
+fn   = filepatt % (varname, year)
+
+# set up directory pattern and dirname
+dirpatt = "%4d"
+dir1 = dirpatt % year
+
+# create full path filename for input file
+xfn = in_dir+"/"+dir1+"/"+fn
+
+ncl_cvt = 0
+if not os.path.exists( xfn+".nc" ):
+  if not os.path.exists( xfn+".grb" ):
+    print "Input file not found with either .nc or .grb extension"
+    print xfn
+    sys.exit()
+  else:
+    ifn = xfn+".grb"
+    ncl_dir = "/lustre/janus_scratch/dbr/tmp"
+    ncl_cmd = "ncl_convert2nc "+ifn+" -u initial_time0_hours -U time -o "+ncl_dir
+    os.system( ncl_cmd )
+    tempfn = ncl_dir+"/"+fn+"temp.nc"
+    ifn = ncl_dir+"/"+fn+".nc"
+    cmd = "mv "+ifn+" "+tempfn
+    os.system( cmd )
+    cmd = "cdo selgrid,2 "+tempfn+" "+ifn
+    os.system( cmd )
+    os.unlink( tempfn )
+    ncl_cvt = 1
+else:
+  ifn = xfn+".nc"
+
+odir = out_dir+"/"+dir1
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+dir1
+
+# create temp and output filenames (reuse xfn)
+xfn = odir+"/"+fn
+tempfn1 = xfn+"_temp1.nc"
+tempfn2 = xfn+"_temp2.nc"
+tempfn3 = xfn+"_temp3.nc"
+tempfn4 = xfn+"_temp4.nc"
+ofn = xfn+".nc"
+
+# 1) extract forecast timesteps into separate datasets with NCO
+cmd = "ncks -d forecast_time1,0 "+ifn+" "+tempfn1
+os.system( cmd )
+cmd = "ncks -d forecast_time1,1 "+ifn+" "+tempfn2
+os.system( cmd )
+
+# 2) remove degenerate dimension forecast_time1 with NCO
+cmd = "ncwa -O -a forecast_time1 "+tempfn1+" "+tempfn1
+os.system( cmd )
+cmd = "ncwa -O -a forecast_time1 "+tempfn2+" "+tempfn2
+os.system( cmd )
+
+# 3) adjust time from forecast initialization to forecast valid, with CDO
+cmd = "cdo shifttime,6hour "+tempfn1+" "+tempfn3
+os.system( cmd )
+cmd = "cdo shifttime,12hour "+tempfn2+" "+tempfn4
+os.system( cmd )
+
+# 4) merge forecasts into time sequence, with CDO (reuse tempfn1)
+os.unlink( tempfn1 )
+cmd = "cdo mergetime "+tempfn3+" "+tempfn4+" "+tempfn1
+os.system( cmd )
+
+os.system("mv "+tempfn1+" "+ofn)
+
+# add history to reflect processing
+cmd = "ncatted -O -a history,global,a,c,'Processing with fc_flatten complete\n' "+ofn
+os.system( cmd )
+
+#pdb.set_trace()
+# clean up temp files, if necessary
+if ncl_cvt == 1:
+  os.unlink( ifn )
+for fn in ( [tempfn1, tempfn2, tempfn3, tempfn4] ):
+  if os.path.exists( fn ):
+    os.unlink( fn )

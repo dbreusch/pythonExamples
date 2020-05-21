@@ -1,0 +1,154 @@
+#!/usr/bin/env python
+# save_hpss:
+# create jobs to migrate WRF and real output files to hpss.
+# handles one run dir.
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, math, commands, glob
+from datetime import time, date, timedelta
+#pdb.set_trace()
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Syntax:  save_hpss mm dd yy [submit]"
+  print "  mm, dd, yy = month, day, year to start at"
+  print "  submit = 'y' to automatically submit batch job (default)"
+  sys.exit()
+
+# get command line args
+mm = sys.argv[1]
+dd = sys.argv[2]
+yy = sys.argv[3]
+if nargin < 5:
+  submit = "y"
+else:
+  submit = sys.argv[4]
+
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+jname = "hpssmigr"
+queue = "share"
+#scr_dir = "/lustre/janus_scratch/dbr/wrf"
+scr_dir = os.getcwd()
+cust_dir = "/projects/dbr/wrf/src/custom"
+jobgroup = "/ptmp/dbr/hpssmigr"
+joblim = 5
+#srcdir = "/lustre/janus_scratch/dbr/wrf/run"
+srcdir = "/lustre/janus_scratch/dbr/wrf/run"
+hpssdir = "/home/dbr/agu_2011/wrf"
+file_patterns = ['wrfout*', 'wrfinput*','wrflowinp*','wrfbdy*']
+
+# calculate estimated wallclock time
+#nd = int( ndays )
+nd = 1
+minperday = 60
+minperjob = minperday * nd
+wc_hh = int( math.floor( minperjob / 60 ) )
+wc_mm = minperjob % 60
+wc_t = time( wc_hh, wc_mm )
+wc_time = wc_t.strftime( "%H:%M")
+
+## call timesteps to create time files in current dir
+#cmd = "timesteps "+mm+" "+dd+" "+yy+" "+ndays
+#os.system( cmd )
+
+lsf_fn_cmds = scr_dir+"/lsf_"+jname+datestr+"_mid"
+
+# create lsf job filename
+lsf_fn_pro = scr_dir+"/lsf_"+jname+datestr+"_pro"
+lsf_fn_epi = scr_dir+"/lsf_"+jname+datestr+"_epi"
+fn_job = scr_dir+"/lsf_"+jname+datestr
+
+# create (edit) lsf_prolog
+cmd = "sed s/DATESTR/"+datestr+"/g < "+cust_dir+"/lsf_prolog | sed s/CLOCK/"+wc_time+"/g | sed s/QUEUE/"+queue+"/g | sed s/BASE/"+jname+"/g > "+lsf_fn_pro
+os.system( cmd )
+
+# create (copy) lsf_epilog
+cmd = "cp "+cust_dir+"/lsf_epilog "+lsf_fn_epi
+os.system( cmd )
+
+## read in start/end dates
+#ifile = open( datestr, "r" )
+#t_list = ifile.readlines()
+#ifile.close()
+#args = t_list[0].split()
+#syy = int(args[0])
+#smm = int(args[1])
+#sdd = int(args[2])
+#args = t_list[1].split()
+#eyy = int(args[0])
+#emm = int(args[1])
+#edd = int(args[2])
+
+ofile = open( lsf_fn_cmds, "w" )
+
+#pdb.set_trace()
+## loop through dates
+#sday = date( syy, smm, sdd )
+#eday = date( eyy, emm, edd )
+#day_inc = timedelta( days=1 )
+#while sday <= eday:
+#  tt = sday.timetuple()
+#  cyy = str( tt.tm_year )
+#  cmm = str( tt.tm_mon )
+#  cdd = str( tt.tm_mday )
+#  datestr2 = "%04d%02d%02d" % (int(cyy), int(cmm), int(cdd))
+datestr2 = datestr
+
+# check that output path exists
+#  odir = hpssdir+"/"+cyy
+odir = hpssdir+"/"+yy
+cmd = "hsi ls "+odir
+rc = commands.getoutput( cmd )
+stat = rc.split('\n')[1]
+if "No such file" in stat:
+  print "Creating hpss directory "+odir
+#  cmd = 'hsi "cd '+hpssdir+' ; mkdir '+cyy+'"'
+  cmd = 'hsi "cd '+hpssdir+' ; mkdir '+yy+'"'
+  os.system( cmd )
+
+odir2 = odir+"/"+datestr2
+cmd = "hsi ls "+odir2
+rc = commands.getoutput( cmd )
+stat = rc.split('\n')[1]
+if "No such file" in stat:
+  print "Creating hpss directory "+odir2
+  cmd = 'hsi "cd '+odir+' ; mkdir '+datestr2+'"'
+  os.system( cmd )
+
+# create HPSS commands for each output dir
+for fp in file_patterns:
+#  rundir = srcdir+"/"+cyy+"/"+datestr2
+  rundir = srcdir+"/"+yy+"/"+datestr2
+  os.chdir( rundir )
+  files = glob.glob( fp )
+  for fn in files:
+    hpss_out = odir2+"/"+fn
+    # HPSS command
+    cmd = "hsi cput "+rundir+"/"+fn+" : "+hpss_out
+    print fn
+    ofile.write( cmd+"\n" )
+
+#sday = sday + day_inc
+
+ofile.close()
+
+# put pieces together
+cmd = "cat "+lsf_fn_pro+" "+lsf_fn_cmds+" "+lsf_fn_epi+" > "+fn_job
+os.system( cmd )
+print "LSF job in file "+fn_job
+if submit == "y":
+  cmd = "bjgroup -s "+jobgroup
+  res = commands.getoutput( cmd )
+  if res.startswith("No job group"):
+    cmd = "bgadd -L "+str(joblim)+" "+jobgroup
+    os.system( cmd )
+  cmd = "bsub -g "+jobgroup+" < "+fn_job
+  os.system( cmd )
+
+# clean up
+os.unlink( lsf_fn_pro )
+os.unlink( lsf_fn_cmds )
+os.unlink( lsf_fn_epi )
+os.unlink( scr_dir+"/"+datestr )
+os.unlink( scr_dir+"/"+datestr+"_ts" )

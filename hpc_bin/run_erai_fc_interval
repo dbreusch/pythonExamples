@@ -1,0 +1,80 @@
+#!/usr/bin/env python
+# run_erai_fc_interval:
+# create shell script to run the adjust forecast intervals script
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os
+#  pdb.set_trace()
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Syntax:  run_erai_fc_interval script fnlist [prefix] [in_dir]"
+  print "  script = script to run on each file (erai_fc_interval)"
+  print "  fnlist = file with list of files to process"
+  print "  prefix = prefix for output script file (default adj_interval)"
+  print "  in_dir = source directory for input files [defaults to erai fc_monthly dir]"
+#  print "          names are relative to /Volumes/linux_backup/antmelt_work/erai"
+  print "          names are relative to /lustre/janus_scratch/dbr/data/erai unless"
+  print "          they start with a /"
+  sys.exit()
+
+# get command line args
+script_cmd = sys.argv[1]
+fnlist = sys.argv[2]
+if nargin < 4:
+  prefix = "adj_interval"
+else:
+  prefix = sys.argv[3]+"_adj"
+if nargin < 5:
+  in_dir = "fc_monthly"
+else:
+  in_dir = sys.argv[4]
+
+jname = prefix
+#root_dir = "/Volumes/linux_backup/antmelt_work/erai/"+in_dir
+root_dir = "/lustre/janus_scratch/dbr/data/erai/fc_monthly"
+
+# read in complete list of files to process
+if not os.path.exists( fnlist ):
+  print "File "+fnlist+" not found. Exiting..."
+  sys.exit()
+ifile = open( fnlist, "r" )
+file_list = ifile.readlines()
+ifile.close()
+file_list.reverse()
+flen = len(file_list)
+
+# start batch job creation
+#jnum = 1
+#sh_cmds = "%s_%02d" % (jname, jnum)
+sh_cmds = "%s" % jname
+
+# process some file names
+print "Creating script file "+sh_cmds
+ofile = open( sh_cmds, "w" )
+ofile.write( "#!/bin/csh\n" )
+fcnt = 1
+
+while flen > 0:
+  fn = file_list.pop().rstrip()
+  flen = len(file_list)
+
+  args = fn.split('/')
+  yy = args[1]
+  dir = args[2]
+  mm = dir[-2:]
+  parts = args[-1].split('.')
+  varname = parts[5]
+  ofile.write( script_cmd+" " )
+  ofile.write( yy+" " )
+  ofile.write( mm+" " )
+  ofile.write( varname+" " )
+  ofile.write( root_dir )
+  ofile.write( "\n" )
+
+ofile.close()
+
+# make script executable
+cmd = "chmod +x "+sh_cmds
+os.system( cmd )

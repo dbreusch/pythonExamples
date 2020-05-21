@@ -1,0 +1,57 @@
+#!/usr/bin/env python
+# save run files to a new tar file
+
+import pdb
+import sys
+import os
+import commands
+from datetime import date, timedelta
+
+nargin = len( sys.argv )
+if nargin < 3:
+  print "Usage:  make_run yyyymmdd_s yyyymmdd_e"
+  sys.exit()
+
+# start date
+s = sys.argv[1]
+yy_s = int(s[0:4])
+mm_s = int(s[4:6])
+dd_s = int(s[6:8])
+sdate = date( yy_s, mm_s, dd_s )
+syy = "%4s" % sdate.year
+smm = "%02d" % sdate.month
+sdd = "%02d" % sdate.day
+
+# end date
+s = sys.argv[2]
+yy_e = int(s[0:4])
+mm_e = int(s[4:6])
+dd_e = int(s[6:8])
+edate = date( yy_e, mm_e, dd_e )
+eyy = "%4s" % edate.year
+emm = "%02d" % edate.month
+edd = "%02d" % edate.day
+
+print "Archiving data for "+syy+"/"+smm+"/"+sdd+" to "+eyy+"/"+emm+"/"+edd
+
+rootdir = "/scratch/dbr120/wrf/"
+archdir = rootdir+"archive/"
+while sdate <= edate:
+  print syy+"/"+smm+"/"+sdd
+  savedir = archdir+syy
+  if not os.path.exists( savedir ):
+    os.mkdir( savedir )
+  datadir = rootdir+syy+"/runs/"+syy+smm+sdd
+  os.chdir( datadir )
+
+  tarname = syy+smm+sdd+".tgz"
+  cmd = "sed s/YYYY/"+syy+"/ < "+archdir+"tar_files.template  | sed s/MM/"+smm+"/ | sed s/DD/"+sdd+"/ > "+archdir+"tar_files"
+  os.system( cmd )
+
+  cmd = "tar czf "+savedir+"/"+tarname+" --files-from "+archdir+"tar_files real_"+syy+smm+sdd+".* wrf_"+syy+smm+sdd+".* real_rsl.* wrf_rsl.*"
+  os.system( cmd )
+
+  sdate = sdate + timedelta( 1 )
+  syy = "%4s" % sdate.year
+  smm = "%02d" % sdate.month
+  sdd = "%02d" % sdate.day

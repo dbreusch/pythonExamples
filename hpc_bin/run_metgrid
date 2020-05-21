@@ -1,0 +1,228 @@
+#!/usr/bin/env python
+# run_metgrid:
+# create batch jobs to run metgrid script.
+#
+# 5/21/18, converted LSF to SLURM
+# 12/4/15, added ensemble support
+# 11/11/15, updates for yellowstone and gismelt pilot
+# 3/14/13, converted to argparse for command line processing
+
+import pdb, sys, os, commands
+import argparse, math
+from datetime import time
+
+# set up arguments (one positional, lots of optional/keyword)
+parser = argparse.ArgumentParser( description = "Create batch jobs to run metgrid script" )
+parser.add_argument( "dirlist", help="directories to process" )
+parser.add_argument( "-s","--script", help="script to run on each file (default: make_metgrid)", default="make_metgrid" )
+parser.add_argument( "-p","--prefix", help="prefix for batch file name/job name (default: batch_metgrid)", default="batch_metgrid", nargs="?" )
+parser.add_argument( "--submit", help="automatically submit batch job (default: n)", default="n", nargs="?", choices=["y", "n"] )
+parser.add_argument( "-j","--jnum", help="starting number suffix for jobs (default: 1)", default=1, type=int, nargs="?" )
+parser.add_argument( "-q","--queue", help="job queue (default: share)", default="share", nargs="?", choices=["geyser","caldera","regular","economy","premium","share"] )
+parser.add_argument( "-r","--recovery", help="this is a recovery job", action="store_true" )
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-v","--verbose", help="provide some debug output", action="store_true")
+parser.add_argument( "-n","--ndays", help="number of days to run (default: 1)", default=1, type=int, nargs="?" )
+parser.add_argument( "-d","--debug", help="enable pdb", action="store_true")
+
+#group = parser.add_mutually_exclusive_group()
+#group.add_argument( "-c","--ccsm", help="input data are from ccsm", action="store_true" )
+#parser.add_argument( "-b","--branch", help="ccsm model branch(default: 20th.track1)", default="20th.track1", choices=["20th.track1","historical","rcp8_5", "rcp85","1pt5degC"], nargs="?" )
+#group.add_argument( "-e","--erai", help="input data are from erai (default)", action="store_true" )
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+debug = args.debug
+if debug:
+  pdb.set_trace()
+script_cmd = args.script
+dirlist = args.dirlist
+prefix = args.prefix
+submit = args.submit
+jnum = args.jnum
+ndays = args.ndays
+queue = args.queue
+if queue in ["geyser", "caldera", "share"]:
+  sharedq = True
+else:
+  sharedq = False
+recovery = args.recovery
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+verbose = args.verbose
+
+if expname == "gis":
+  acctinfo = "UNMT0001"
+if expname == "ant":
+  acctinfo = "P35901011"
+
+if verbose:
+  print "Script="+script_cmd
+  print "ndays="+str(ndays)
+  print "Dirfile="+dirlist
+  print "Prefix="+prefix
+  print "Submit="+submit
+  print "jnum="+str(jnum)
+  if sharedq:
+    print "Queue="+queue+" (shared)"
+  else:
+    print "Queue="+queue+" (exclusive)"
+  if recovery:
+    print "Recovery"
+  else:
+    print "Normal"
+  print "Model="+model.upper()
+  print "Branch="+branch
+  print "Experiment="+expname
+  print "Ensemble="+enss
+
+jname = prefix
+jobs_per_block = 16 # equates to number of cores available
+max_job_blocks = 16  # max number of blocks of jobs per batch job
+
+# calculate estimated wallclock time
+#metgrid_minperday = 3.6   # avg 2.4 min plus 50%
+#minperjob = metgrid_minperday * ndays
+metgrid_minperblock = 1.75   # avg ~30 sec (11/11/15), added safety factor
+minperjob = metgrid_minperblock * max_job_blocks
+wc_hh = int( math.floor( minperjob / 60 ) )
+wc_mm = int( round( minperjob % 60 ) )
+wc_t = time( wc_hh, wc_mm )
+wc_time = wc_t.strftime( "%H:%M:%S")
+print "Estimated real time = "+wc_time
+# wc_time = "03:00"
+
+# only matter if script actually submits the job
+jobgroup = "/dbr/metgrid"
+joblim = 6
+
+#wrf_root_dir = "/glade/p/work/dbr/wrf/"+expname+"_"+model
+wrf_root_dir = "/glade/u/home/dbr/work/wrf/"+expname+"_"+model
+cust_dir = wrf_root_dir+"/src/custom"
+
+# read in complete list of directories to process
+if not os.path.exists( dirlist ):
+  print "File of directory names ("+dirlist+") does not exist!"
+  sys.exit()
+ifile = open( dirlist, "r" )
+file_list = ifile.readlines()
+ifile.close()
+file_list.reverse()
+flen = len(file_list)
+
+# batch job template pieces
+file_hdr = "pbs_header"
+if not os.path.exists( cust_dir+"/"+file_hdr ):
+  print "File header ("+file_hdr+") does not exist!"
+  sys.exit()
+file_bot = "pbs_trailer"
+if not os.path.exists( cust_dir+"/"+file_bot ):
+  print "File trailer ("+file_bot+") does not exist!"
+  sys.exit()
+
+# start batch job creation loop
+while flen > 0:
+  if jnum > 999:
+    fn_root = "%s_%04d" % (jname, jnum)
+  else:
+    fn_root = "%s_%03d" % (jname, jnum)
+  n_job_blocks = 1
+
+  # create job filenames
+  fn_pro = fn_root+"_pro"
+  fn_cmds = fn_root+"_mid"
+  fn_epi = fn_root+"_epi"
+  fn_job = fn_root
+
+  # create (edit) prolog
+  cmd = "sed -e s/ACCT/"+acctinfo+"/g -e s/BASE_DATESTR/"+fn_job+"/g -e s/CLOCK/"+wc_time+"/g -e s/QUEUE/"+queue+"/g < "+cust_dir+"/"+file_hdr+" > "+fn_pro
+  os.system( cmd )
+
+  # create (copy) epilog
+  cmd = "cp "+cust_dir+"/"+file_bot+" "+fn_epi
+  os.system( cmd )
+
+  # process some file names
+  ofile = open( fn_cmds, "w" )
+  fcnt = 1
+
+  while flen > 0:
+    fn = file_list.pop().rstrip()
+    flen = len(file_list)
+    if fn[0] == "#":
+      continue
+
+    lst = fn.split('/')
+    diryy = lst[1]
+    dirstr = lst[2]
+    dirmm = dirstr[4:6]
+    dirdd = dirstr[6:].rstrip()
+
+    ofile.write( script_cmd+" " )
+    ofile.write( dirmm+" "+dirdd+" "+diryy )
+    ofile.write( " --ndays "+str(ndays) )
+    if recovery:
+      ofile.write( " --recovery" )
+    if debug:
+      ofile.write( " --debug" )
+    ofile.write( " --exp "+expname )
+    ofile.write( " --ensemble "+str(ens) )
+    ofile.write( " --model "+model )
+    ofile.write( " --branch "+branch )
+    ofile.write( " &\n" )
+
+    fcnt += 1
+    if fcnt > jobs_per_block:
+      ofile.write( "wait\n" )
+      n_job_blocks += 1
+      fcnt = 1
+      if n_job_blocks > max_job_blocks:
+        break
+
+  ofile.write( "wait\n" )
+  ofile.close()
+#  pdb.set_trace()
+
+# put pieces together
+  cmd = "cat "+fn_pro+" "+fn_cmds+" "+fn_epi+" > "+fn_job
+  os.system( cmd )
+  print "batch job in file "+fn_job
+  if submit == "y":
+    cmd = "bjgroup -s "+jobgroup
+    res = commands.getoutput( cmd )
+    if res.startswith("No job group"):
+      cmd = "bgadd -L "+str(joblim)+" "+jobgroup
+      os.system( cmd )
+#    cmd = "bsub -H -g "+jobgroup+" < "+fn_job
+    cmd = "bsub -g "+jobgroup+" < "+fn_job
+    os.system( cmd )
+
+# clean up
+  os.unlink( fn_pro )
+  os.unlink( fn_cmds )
+  os.unlink( fn_epi )
+
+  jnum += 1
+
+  if flen == 0:
+    break

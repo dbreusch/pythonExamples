@@ -1,0 +1,158 @@
+#!/usr/bin/env python
+# script to edit geo_em.dxx.nc files to fix weirdness
+# in soils, landuse, slopecat, greenfrac and snow albedo.
+
+import pdb, sys, os
+import numpy as np
+import Nio
+
+nargin = len(sys.argv)
+if nargin < 2:
+  print "Syntax:  fix_geo_em geo_em_fn"
+  print "  Make various corrections to a geo_em file from geogrid."
+  print "  Changes are made in place so backup first!"
+  print "    geo_em_fn = filename of file to fix"
+  sys.exit()
+
+ifn = sys.argv[1]
+if not os.path.exists( ifn ):
+  print "File "+ifn+" not found.  Exiting..."
+  sys.exit()
+nc = Nio.open_file( ifn, "rw" )
+
+# try to determine landuse table type, USGS or MODIS?
+lu_attr = nc.attributes['MMINLU']
+if "MODIS" in lu_attr:
+  lu_type = "MODIS"
+  lu_water_cat = 17
+  lu_ice_cat = 15
+elif "USGS" in lu_attr:
+  lu_type = "USGS"
+  lu_water_cat = 16
+  lu_ice_cat = 24
+else:
+  print "Landuse table attribute "+lu_attr+" not recognized.  Exiting..."
+  sys.exit()
+print "Using "+lu_type+" land use table"
+print "Water == "+str(lu_water_cat)+", Ice == "+str(lu_ice_cat)
+
+# indices for soil category table
+water_cat = 14
+water_ix = water_cat - 1
+ice_cat = 16
+ice_ix = ice_cat - 1
+
+# --------------------------------
+# read in all the needed variables
+# --------------------------------
+
+# lat/lon
+xlat = nc.variables['XLAT_M'][:]
+xlon = nc.variables['XLONG_M'][:]
+
+# 2-d vars
+landmask  = nc.variables['LANDMASK'][:]
+lu_index  = nc.variables['LU_INDEX'][:]
+snoalb    = nc.variables['SNOALB'][:]
+slopecat  = nc.variables['SLOPECAT'][:]
+soiltemp  = nc.variables['SOILTEMP'][:]
+scb_dom   = nc.variables['SCB_DOM'][:]
+sct_dom   = nc.variables['SCT_DOM'][:]
+
+# 3-d vars
+landusef  = nc.variables['LANDUSEF'][:]
+soilcbot  = nc.variables['SOILCBOT'][:]
+soilctop  = nc.variables['SOILCTOP'][:]
+albedo12m = nc.variables['ALBEDO12M'][:]
+greenfrac = nc.variables['GREENFRAC'][:]
+
+# --------------------------------
+# start making corrections
+# --------------------------------
+
+# fix #1:  landmask == water @ a "singularity" on the Ross Ice Shelf.
+ix1 = xlat > -81
+ix2 = xlat < -79
+lat_ix = np.logical_and( ix1, ix2 )
+ix1 = xlon > 170
+ix2 = xlon < 185
+lon_ix = np.logical_and( ix1, ix2 )
+ll_index = np.logical_and( lat_ix, lon_ix )
+landmask[ll_index] = 1
+
+# fix #2:  "bad" values in landusef near the above error
+landusef[0,14,ll_index[0,:,:]] = 1
+landusef[0,16,ll_index[0,:,:]] = 0
+
+# fix #3:  "bad" values in slopecat near the above error
+slopecat[ll_index] = 13
+
+# fix #4:  "bad" values in soiltemp near the above error
+st_sub = soiltemp[ll_index]
+st_ix1 = st_sub > 0
+st_ix2 = st_sub == 0
+st_sub[st_ix2] = np.mean( st_sub[st_ix1] )
+soiltemp[ll_index] = st_sub
+
+# fix #5:  "bad" values in albedo12m near the above error
+alb_sub = albedo12m[0,:,ll_index[0,:,:]]
+alb_ix1 = alb_sub < 70
+alb_sub[alb_ix1] = 70
+albedo12m[0,:,ll_index[0,:,:]] = alb_sub
+
+# fix #6:  "bad" values in greenfrac near the above error
+grn_sub = greenfrac[0,:,ll_index[0,:,:]]
+grn_ix1 = grn_sub < 0.01
+grn_sub[grn_ix1] = 0.01
+greenfrac[0,:,ll_index[0,:,:]] = grn_sub
+
+# fix #7:  "bad" values in lu_index near the above error
+lu_index[0,ll_index[0,:,:]] = lu_ice_cat
+
+# fix #8:  "bad" values in snoalb near the above error, but also @ pole
+snoalb[0,ll_index[0,:,:]] = 75
+ll_index = xlat < -89
+snoalb[0,ll_index[0,:,:]] = 75
+
+# fix #9:  landmask == land & soil_type == water
+#          affects scb_dom, sct_dom, soilcbot, soilctop
+lnd_index = landmask == 1
+
+# soil-bottom dominant, set to ice
+sdb_index = scb_dom == water_cat
+new_index = np.logical_and( lnd_index, sdb_index )
+scb_dom[ new_index ] = ice_cat
+
+# soil-bottom categories water (ice), set to false (true)
+scb_index = soilcbot[:,water_ix,:,:] == 1
+new_index = np.logical_and( lnd_index, scb_index )
+soilcbot[ 0, water_ix, new_index[0,:,:] ] = 0
+soilcbot[ 0, ice_ix, new_index[0,:,:] ] = 1
+
+# soil-top dominant, set to ice
+sdt_index = sct_dom == water_cat
+new_index = np.logical_and( lnd_index, sdt_index )
+sct_dom[ new_index ] = ice_cat
+
+# soil-top categories water (ice), set to false (true)
+sct_index = soilctop[:,water_ix,:,:] == 1
+new_index = np.logical_and( lnd_index, sct_index )
+soilctop[ 0, water_ix, new_index[0,:,:] ] = 0
+soilctop[ 0, ice_ix, new_index[0,:,:] ] = 1
+
+# write the modified vars back to the file
+nc.variables['LANDMASK'][:]  = landmask
+nc.variables['LU_INDEX'][:]  = lu_index
+nc.variables['SNOALB'][:]    = snoalb
+nc.variables['SLOPECAT'][:]  = slopecat
+nc.variables['SOILTEMP'][:]  = soiltemp
+nc.variables['SCB_DOM'][:]   = scb_dom
+nc.variables['SCT_DOM'][:]   = sct_dom
+
+nc.variables['LANDUSEF'][:]  = landusef
+nc.variables['SOILCBOT'][:]  = soilcbot
+nc.variables['SOILCTOP'][:]  = soilctop
+nc.variables['ALBEDO12M'][:] = albedo12m
+nc.variables['GREENFRAC'][:] = greenfrac
+
+nc.close()

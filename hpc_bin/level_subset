@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+# use NCO to select specific ua levels from global (i.e., ERA-I) file.
+# in theory, only the variable name changes for WRF output so it may
+# be possible to continue using this script with those datasets.
+
+import pdb, sys, os, commands
+
+nargin = len(sys.argv)
+if nargin < 9:
+  print "Usage: level_subset file_type levels diryy dirmm dirdd fileyy filemm filedd filemm [indir]"
+  print "  file_type = sfc | ua | uv | fc"
+  print"               used to define file pattern"
+  print "  levels = indices (integer) or pressures (float) of levels to select"
+  print "  diryy, dirmm, dirdd = year, month, day of input/output dir"
+  print "  fileyy, filemm, filedd, file hh = year, month, day, hour of input/output file"
+  print "  indir = source directory for input files [defaults to erai grb dir]"
+  print "          names are relative to /glade/scratch/dbr/data/erai unless"
+  print "          they start with a /"
+  sys.exit()
+
+# get type of input file
+file_type = sys.argv[1]
+
+# get levels
+levels = sys.argv[2].split(',')
+
+# get directory date info
+diryy, dirmm, dirdd = map(int, sys.argv[3:6])
+
+# get file date info
+fileyy, filemm, filedd, filehh = map(int, sys.argv[6:10])
+
+# base directory names
+root_dir = "/glade/scratch/dbr/data/erai"
+if nargin < 11:
+  in_dir = root_dir+"/grb"
+else:
+  arg_dir = sys.argv[10]
+  if arg_dir.startswith('/'):
+    in_dir = arg_dir
+  else:
+    in_dir = root_dir+"/"+arg_dir
+
+out_dir = root_dir+"/sub_level"
+
+# set up directory/file patterns and pieces
+dir1patt = "%4d"
+dir2patt = "%4d%02d%02d"
+if "sfc" in file_type:
+  filepatt = "ei.oper.an.sfc.regn128sc.%04d%02d%02d%02d"
+elif "ua" in file_type:
+  filepatt = "ei.oper.an.pl.regn128sc.%04d%02d%02d%02d"
+elif "uv" in file_type:
+  filepatt = "ei.oper.an.pl.regn128uv.%04d%02d%02d%02d"
+elif "fc" in file_type:
+  filepatt = "ei.oper.fc.sfc.regn128sc.%04d%02d%02d%02d"
+else:
+  print "Unknown file type provided, exiting"
+  sys.exit()
+fillval = "-9999."
+
+# assign name of level var based on input file name
+if "ei.oper" in filepatt:
+  lvl_var = "lv_ISBL0"
+else:
+  "Files not yet set up, exiting"
+  sys.exit()
+
+dir1 = dir1patt % diryy
+dir2 = dir2patt % (diryy, dirmm, dirdd)
+fn   = filepatt % (fileyy, filemm, filedd, filehh)
+
+# following checks for nc vs grb only work for erai files
+# pwrf files are nc but don't have extension!
+xfn = in_dir+"/"+dir1+"/"+dir2+"/"+fn
+ncl_cvt = 0
+#pdb.set_trace()
+if not os.path.exists( xfn+".nc" ):
+  if not os.path.exists( xfn+".grb" ):
+    print "Input file "+xfn+" not found with either .nc or .grb extension, exiting"
+    sys.exit()
+  else:
+    ifn = xfn+".grb"
+    ncl_dir = "/glade/scratch/dbr/tmp"
+    ncl_cmd = "ncl_convert2nc "+ifn+" -o "+ncl_dir
+    os.system( ncl_cmd )
+    ifn = ncl_dir+"/"+fn+".nc"
+    ncl_cvt = 1
+else:
+  ifn = xfn+".nc"
+
+# confirm input file exists
+if not os.path.exists( ifn ):
+  print "Input file "+ifn+" not found, exiting"
+  sys.exit()
+
+odir = out_dir+"/"+dir1+"/"+dir2
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+dir2
+
+xfn = odir+"/"+fn
+tempfn = xfn+"_temp.nc"
+ofn = xfn+".nc"
+
+# use NCO to select specific ua levels
+nco_cmd = "ncks -O "
+for lvl in levels:
+  nco_cmd = nco_cmd+" -d "+lvl_var+","+lvl
+
+nco_cmd = nco_cmd+" "+ifn+" "+tempfn
+os.system( nco_cmd )
+
+os.system("mv "+tempfn+" "+ofn)
+
+# add history to reflect level processing
+cmd = "ncatted -O -a history,global,a,c,'Processing with level_subset complete\n' "+ofn
+os.system( cmd )
+
+# clean up temp file if necessary
+if ncl_cvt == 1:
+  os.unlink( ifn )

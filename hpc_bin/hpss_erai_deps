@@ -1,0 +1,72 @@
+#!/usr/bin/env python
+# submit ERA-I HPSS retrieval jobs with interjob dependencies
+# input file has one job per line
+# 8/8/12, changed job dependency from "done" to "ended".
+#         this should let the job go whether the previous job
+#         was successful or exited.
+
+import pdb, sys, os, commands
+
+nargin = len( sys.argv )
+if nargin < 2:
+  print "Usage: hpss_erai_deps ifn [dep_job]"
+  print "  ifn = list of jobs to submit"
+  print "  dep_job = job # to set dependency on for first job"
+  print "            in this series.  no default."
+  sys.exit()
+
+jobgroup = "/ptmp/dbr/hpsserai"
+
+# get list of jobs to process
+ifn = sys.argv[1]
+if not os.path.exists( ifn ):
+  print ifn+" not found.  Exiting..."
+  sys.exit()
+
+ifile = open( ifn, "r" )
+jobs_list = ifile.readlines()
+ifile.close()
+
+if nargin > 2:
+  dep_job = sys.argv[2]
+else:
+  dep_job = ""
+
+#pdb.set_trace()
+i = 1
+for line in jobs_list:
+  if line[0] == '#':  # allow for commented lines
+    continue
+  line = line.rstrip()
+  nn = line.split('/')
+  jdir = nn[1]
+  jname = nn[-1]
+  os.chdir( jdir )
+
+  cmd = "bsub"
+  if i == 1:  # hold first job
+    cmd = cmd+" -H"
+    if len(dep_job) > 0:  # is there a dependency job #?
+      cmd = cmd+" -w 'ended("+dep_job+")'"
+  cmd = cmd+" -g"+jobgroup
+
+  if i > 1: # add dependency on previous job
+    cmd = cmd+" -w 'ended("+jobid+")'"
+  cmd = cmd+" < "+jname
+  s1 = commands.getoutput( cmd )
+
+  # get job id from output
+  s2 = s1.split(' ')[1]
+  jobid = s2.strip('<>')
+  if not jobid.isdigit():
+    print "Submit failed, exiting"
+    print 'bsub returned "'+s1+'"'
+    sys.exit()
+
+  if i == 1:
+    print "Root job "+jobid+" submitted on hold"
+
+  print jobid+": "+cmd
+
+  i += 1
+  os.chdir( ".." )

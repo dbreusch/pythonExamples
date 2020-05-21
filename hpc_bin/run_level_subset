@@ -1,0 +1,175 @@
+#!/usr/bin/env python
+# run_level_subset:
+# create LSF jobs to run ua level subsetting script.
+
+import pdb, sys, os, commands, math
+from datetime import time
+#  pdb.set_trace()
+
+nargin = len(sys.argv)
+if nargin < 5:
+  print "Syntax:  run_level_subset script fnlist levels varlist [prefix] [submit] [jnum] [iter_per_script] [indir]"
+  print "  script = script to run on each file (level_subset_global, level_subset_rcm)"
+  print "  fnlist = file with list of files to process"
+  print "  levels = indices (integer) or pressures (float) of levels to select"
+  print "  varlist = RCM: file with list of variables to process"
+  print "            global: indicates input file type (sfc | ua | uv | fc)"
+  print "  prefix = prefix for LSF batch file name/job name (default lsf_lvl)"
+  print "  submit = 'y' to automatically submit batch job (default n)"
+  print "  jnum = starting number suffix for LSF jobs (default 1)"
+  print "  iter_per_script = how many times each script will execute groups of"
+  print "          level_subset commands and wait (default 8)"
+  print "          use this option to set the total number of LSF scripts"
+  print "  indir = source directory for input files [defaults to erai grb dir]"
+  print "          names are relative to /glade/scratch/dbr/data/erai unless"
+  print "          they start with a /"
+  sys.exit()
+
+# get command line args
+script_cmd = sys.argv[1]
+fnlist = sys.argv[2]
+levels = sys.argv[3]
+varlist = sys.argv[4]
+if nargin < 6:
+  prefix = "lsf_lvl"
+else:
+  prefix = sys.argv[5]
+if nargin < 7:
+  submit = "n"
+else:
+  submit = sys.argv[6]
+if nargin < 8:
+  jnum = 1
+else:
+  jnum = int(sys.argv[7])
+if nargin < 9:
+  iter_per_script = 8
+else:
+  iter_per_script = int(sys.argv[8])
+if nargin < 10:
+  in_dir = "grb"
+else:
+  in_dir = sys.argv[9]
+
+jname = prefix
+queue = "regular"
+#queue = "share"
+
+# calculate wc_time based on # iters/script
+#wc_time = "00:15"
+min_per_iter = 10
+min_per_job = iter_per_script * min_per_iter
+wc_hh = int( math.floor( min_per_job / 60 ) )
+wc_mm = min_per_job % 60
+wc_t = time( wc_hh, wc_mm )
+wc_time = wc_t.strftime( "%H:%M")
+print "Estimated time = "+wc_time
+
+jobgroup = "/ptmp/dbr/sublevel"
+joblim = 12
+
+wrf_root_dir = "/glade/home/dbr/wrf"
+cust_dir = wrf_root_dir+"/src/custom"
+
+# read in complete list of files to process
+ifile = open( fnlist, "r" )
+file_list = ifile.readlines()
+ifile.close()
+file_list.reverse()
+flen = len(file_list)
+
+# start batch job creation loop
+while flen > 0:
+  lsf_root = "%s_%03d" % (jname, jnum)
+
+  # create lsf job filenames
+  lsf_fn_pro = lsf_root+"_pro"
+  lsf_fn_cmds = lsf_root+"_mid"
+  lsf_fn_epi = lsf_root+"_epi"
+  fn_job = lsf_root
+
+  # create (edit) lsf_prolog
+  cmd = "sed s/BASE_DATESTR/"+fn_job+"/g < "+cust_dir+"/lsf_prolog | sed s/CLOCK/"+wc_time+"/g | sed s/QUEUE/"+queue+"/g > "+lsf_fn_pro
+  os.system( cmd )
+
+  # create (copy) lsf_epilog
+  cmd = "cp "+cust_dir+"/lsf_epilog "+lsf_fn_epi
+  os.system( cmd )
+
+  # process some file names
+  ofile = open( lsf_fn_cmds, "w" )
+  ofile.write( "module load nco\n" )
+  fcnt = 1
+  iter_cnt = 1
+
+  while flen > 0:
+    fn = file_list.pop()
+    flen = len(file_list)
+
+    if "wrfout" in fn:
+      lst = fn.split('/')
+      diryy = lst[1]
+      dirstr = lst[2]
+      dirmm = dirstr[4:6]
+      dirdd = dirstr[6:]
+      filestr = lst[3]
+      fileyy = filestr[11:15]
+      filemm = filestr[16:18]
+      filedd = filestr[19:21]
+      filehh = filestr[22:24]
+    if "ei.oper" in fn:
+      lst = fn.split('/')
+      diryy = lst[1]
+      dirstr = lst[2]
+      dirmm = dirstr[4:6]
+      dirdd = dirstr[6:]
+      parts = lst[3].split('.')
+      filestr = parts[-2]
+      fileyy = filestr[0:4]
+      filemm = filestr[4:6]
+      filedd = filestr[6:8]
+      filehh = filestr[8:10]
+
+    ofile.write( script_cmd+" " )
+    ofile.write( varlist+" " )
+    ofile.write( levels+" " )
+    ofile.write( diryy+" "+dirmm+" "+dirdd+" " )
+    ofile.write( fileyy+" "+filemm+" "+filedd+" "+filehh )
+    ofile.write( " "+in_dir )
+    ofile.write( " &\n" )
+
+    fcnt += 1
+    if fcnt > 32:
+      iter_cnt += 1
+      ofile.write( "wait\n" )
+      if iter_cnt > iter_per_script:
+        break
+      else:
+        fcnt = 1
+
+  if fcnt < 32:
+    ofile.write( "wait\n" )
+  ofile.close()
+
+# put pieces together
+  cmd = "cat "+lsf_fn_pro+" "+lsf_fn_cmds+" "+lsf_fn_epi+" > "+fn_job
+  os.system( cmd )
+  print "LSF job in file "+fn_job
+  if submit == "y":
+    cmd = "bjgroup -s "+jobgroup
+    res = commands.getoutput( cmd )
+    if res.startswith("No job group"):
+      cmd = "bgadd -L "+str(joblim)+" "+jobgroup
+      os.system( cmd )
+    cmd = "bsub -g "+jobgroup+" < "+fn_job
+    os.system( cmd )
+
+# clean up
+  os.unlink( lsf_fn_pro )
+  os.unlink( lsf_fn_cmds )
+  os.unlink( lsf_fn_epi )
+
+  jnum += 1
+
+  if flen == 0:
+    break

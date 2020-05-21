@@ -1,0 +1,105 @@
+#!/usr/bin/env python
+# timesteps:
+# create files containing timestamp information useful for
+# WPS/WRF namelists and retrieving files from HPSS.
+# files are created in current directory.
+# file 1 = yyyymmdd: 1 line each for start/end dates
+#   yyyy mm dd start
+#   yyyy mm dd end
+#
+# file 2 = yyymmdd_ts: 4 lines for each day between start and end
+#   yyyy mm dd 00 start
+#   yyyy mm dd 06 start
+#   yyyy mm dd 12 start
+#   yyyy mm dd 18 start
+#     .
+#     .
+#     .
+#   yyyy mm dd 00 end
+#   yyyy mm dd 06 end
+#   yyyy mm dd 12 end
+#   yyyy mm dd 18 end
+#
+# file 3 = yyymmdd_jobs: 1 line for each run start day
+#   yyyy mm dd ndays
+
+import time, pdb, sys
+from datetime import date
+from datetime import timedelta
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Syntax:  timesteps mm dd yy ndays daysperjob"
+  print "  mm, dd, yy = month, day, year to start at"
+  print "  ndays = total number of days to process (defaults to 3)"
+  print "  daysperjob = days per job (defaults to 3)"
+  sys.exit()
+
+# get command line args
+mm = int(sys.argv[1])
+dd = int(sys.argv[2])
+yy = int(sys.argv[3])
+if nargin < 5:
+  ndays = 3
+else:
+  ndays = int(sys.argv[4])
+ndays2 = ndays - 1
+if nargin < 6:
+  daysperjob = 3
+else:
+  daysperjob = int(sys.argv[5])
+daysperjob2 = daysperjob - 1
+
+#print yy, mm, dd, ndays, daysperjob
+
+hh = [ "00", "06", "12", "18" ]
+#scr_dir = "/glade/scratch/dbr/wrf"
+
+# create starting and ending dates
+sday = date( yy, mm, dd )
+req_inc = timedelta( days=ndays2 )
+eday = sday + req_inc
+
+# daily increment
+day_inc = timedelta( days=1 )
+
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+
+# create file 1
+#ofn = scr_dir+"/"+datestr
+ofn = datestr
+#print "start/end file = "+ofn
+ofile = open( ofn, "w" )
+ofile.write( sday.strftime( "%Y %m %d" )+"\n")
+ofile.write( eday.strftime( "%Y %m %d" )+"\n")
+ofile.close
+
+# create file 2
+eday = eday + day_inc
+#ofn = scr_dir+"/"+datestr+"_ts"
+ofn = datestr+"_ts"
+#print "timestep file = "+ofn
+ofile = open( ofn, "w" )
+today = sday
+# loop through days writing hourly timesteps
+while today < eday:
+#  print today
+  for h in hh:
+    ofile.write( today.strftime( "%Y %m %d" )+" "+h+"\n")
+  today = today + day_inc
+ofile.close
+
+# create file 3
+nday_inc = timedelta( days=ndays2 )
+run_inc = timedelta( days=daysperjob2 )
+eday = sday + nday_inc
+ofn = datestr+"_jobs"
+ofile = open( ofn, "w" )
+today = sday
+while today < eday:
+#  print today
+  ofile.write( today.strftime( "%Y %m %d" )+" "+str(daysperjob)+"\n")
+  today = today + run_inc
+#ofile.write( today.strftime( "%Y %m %d" )+" 2\n")
+ofile.close
+#pdb.set_trace()

@@ -1,0 +1,91 @@
+#!/usr/bin/env python
+# check ungrib results:
+# - number of output files
+# - end of ungrib.log
+# - end of ungrib_*.out
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, glob, os, commands
+
+nargin = len( sys.argv )
+if nargin < 2:
+  yearpatt = "*"
+else:
+  yearpatt = sys.argv[1]
+if nargin < 3:
+  monpatt = "*"
+else:
+  monpatt = sys.argv[2]
+
+rdir_root="/lustre/janus_scratch/dbr/wrf/wps/run"
+fdir_root="/lustre/janus_scratch/dbr/data/erai/ungrib"
+cdir=os.getcwd()
+
+rdirpatt = rdir_root+"/"+yearpatt
+rdirlist = glob.glob( rdirpatt )
+if len(rdirlist)<1:
+  print "1: No files found, check year pattern"
+  print rdirpatt
+  sys.exit()
+if len(rdirlist)>1:
+  rdirlist.sort()
+
+fdirpatt = fdir_root+"/"+yearpatt
+fdirlist = glob.glob( fdirpatt )
+if len(fdirlist)<1:
+  print "2: No files found, check year pattern"
+  print fdirpatt
+  sys.exit()
+if len(fdirlist)>1:
+  fdirlist.sort()
+
+#pdb.set_trace()
+for index in range(len(rdirlist)):
+  rdirmpatt = rdir_root+"/"+yearpatt+"/????"+monpatt
+  rdirmlist = glob.glob( rdirmpatt )
+  if len(rdirmlist)<1:
+    print "3: No files found, check year/month pattern"
+    print rdirmpatt
+    sys.exit()
+  if len(rdirmlist)>1:
+    rdirmlist.sort()
+
+  fdirmpatt = fdir_root+"/"+yearpatt+"/????"+monpatt
+  fdirmlist = glob.glob( fdirmpatt )
+  if len(fdirmlist)<1:
+    print "4: No files found, check year/month pattern"
+    print fdirmpatt
+    sys.exit()
+  if len(fdirmlist)>1:
+    fdirmlist.sort()
+
+  for index2 in range(len(rdirmlist)):
+    os.chdir( fdirmlist[index2] )
+    nf=commands.getoutput("ls | wc -l")
+
+    os.chdir( rdirmlist[index2] )
+    fpatt="ungrib_*.out"
+    gr = glob.glob( fpatt )
+    if len(gr) > 0:
+      if len(gr) > 1:
+        gr.sort(reverse=True)
+      cmd="tail -2 "+gr[0]+" | head -1"
+      r=commands.getoutput( cmd )
+      if "Job ended" not in r:
+        r = "Job in progress..."
+    else:
+      r=" "
+
+    cmd = "tail -1 ungrib.log"
+    aa = commands.getoutput( cmd )
+    if "cannot open" in aa:
+      st = " "
+    else:
+      ww = aa.split(' ')
+      st = ww[-6]
+
+    ww = fdirmlist[index2].split('/')
+    d = ww[-1]
+
+    print d+" "+nf+" "+r+" "+st

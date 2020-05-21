@@ -1,0 +1,144 @@
+#!/usr/bin/env python
+# save_wrf_spinup:
+# create a shell script to archive all spinup files found in the 
+# wrf run directories for a given year.
+# This script runs from a YEAR directory!
+#
+# Args:
+#  yy:  year to process
+#  mm:  month to process (optional, defaults to "*")
+#  ofn: output file name (optional, defaults to "spinup_yy_mm")
+#  ens: ensemble member number (defaults to 0, i.e., none)
+#
+# 2017/09/25, added ensemble # argument and switched to argparse; also
+#             added some error checking on dir/file list lengths
+
+import pdb, sys, os
+import argparse
+from glob import glob
+
+# -----------------------------------------------------------
+# set up arguments parser
+parser = argparse.ArgumentParser( description = "create script to save WRF spinup files" )
+parser.add_argument( "-y","--year", help="year to process", nargs="?" )
+parser.add_argument( "-m","--month", help="month to process (default: all)", nargs="?", default="x" )
+parser.add_argument( "-f","--ofn", help="script name (default: spinup_yy_mm)", nargs="?", default="x" )
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+yy = args.year
+ofn = args.ofn
+if ofn == "x":
+  ofn = "spinup_"+yy
+mm = args.month
+if mm == "x":
+  mmf = '*'
+  mmpatt = '*'
+else:
+  mmf = '%02d' % int( mm )
+  ofn = ofn+"_"+mmf
+  mmpatt = mmf+'*'
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+
+# -----------------------------------------------------------
+
+if os.path.isdir( yy ):
+  os.chdir( yy )
+else:
+  print "Run directory "+yy+" does not exist"
+  sys.exit()
+
+cdir = os.getcwd()
+if ens < 1:
+  rootdir = os.path.dirname(os.path.dirname(cdir))
+  rdir = rootdir+"/run/"+yy
+  sdir = rootdir+"/spinup/"+yy
+else:
+  rootdir = os.path.dirname(os.path.dirname(os.path.dirname(cdir)))
+  rdir = rootdir+"/run/"+enss+"/"+yy
+  sdir = rootdir+"/spinup/"+enss+"/"+yy
+if not os.path.isdir( sdir ):
+  os.makedirs( sdir )
+
+# open script output file
+sfile = open( ofn, "w" )
+sfile.write( "#!/bin/csh\n" )
+sfile.write( "# move spinup files to archive directory\n\n" )
+sfile.write( "cd "+cdir+"\n" )
+
+# build list of run directories
+globpatt = yy+mmpatt
+dlist = glob( globpatt )
+if len( dlist ) < 1:
+  print "No directories found!"
+  sys.exit()
+dlist.sort()
+for dname in dlist:   # go through list of files/dirs
+  if os.path.isdir( dname ):
+    print dname
+    os.chdir( dname )
+
+    odir = sdir+"/"+dname
+    if not os.path.isdir( odir ):
+      os.makedirs( odir )
+
+    # get list of wrfout files in directory
+    flist = glob( 'wrfout_*' )
+    if len( flist ) < 1:
+      print "No wrfout files found!"
+      sys.exit()
+    flist.sort()
+    nfiles = len( flist )
+
+    # --------------------------------------------------------
+    # determine number of spinup files by looking at files list
+    # to find the break between the first and second days of the run
+    # --------------------------------------------------------
+    yymmdd = flist[0].split('_')[2]
+    mmdd = '-'.join( yymmdd.split('-')[1:3] )
+    spinup = 1
+    for f in flist[1:]:
+      yymmdd = f.split('_')[2]
+      mmdd2 = '-'.join( yymmdd.split('-')[1:3] )
+      if mmdd2 == mmdd:
+        spinup += 1
+      else:
+        break
+
+    # --------------------------------------------------------
+    # the following doesn't work when number of days in the
+    # month changes...
+    # --------------------------------------------------------
+#    if nfiles % 32 == 0: # 32 days (CESM LE)
+#      spinup = nfiles / 32
+#    else:
+#      if nfiles % 3 == 0: # 3 days
+#        spinup = nfiles / 3
+#      else:
+#        if nfiles % 2 == 0: #2 days
+#          spinup = nfiles / 2
+#        else:  # unsupported
+#          print "Spinup not recognized"
+#          sys.exit()
+
+#    pdb.set_trace()
+    rmlist = flist[ 0:spinup ]  # pull the spinup names 
+  
+    # write out shell commands
+    for f in rmlist:
+      ifile = dname+"/"+f
+      ofile = odir+"/spinup_"+f
+      sfile.write( "echo "+f+"\n" )
+      sfile.write( "mv "+ifile+" "+ofile+"\n" )
+
+    os.chdir( '..' )
+
+sfile.close()
+os.system( "chmod +x "+ofn )

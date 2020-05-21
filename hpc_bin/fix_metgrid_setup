@@ -1,0 +1,79 @@
+#!/usr/bin/env python
+import pdb, sys, os, commands
+
+nargin = len( sys.argv )
+if nargin < 1:
+  print "Usage:  fix_metgrid_setup file_list"
+  print "  Setup for a metgrid rerun (save old files)."
+  print "  file_list - list of files to process"
+  print " "
+  print "  See metgrid_script_yyyy_mm for batch commands to"
+  print "  actually run metgrid."
+  sys.exit()
+
+file_list = sys.argv[1]
+if not os.path.exists( file_list ):
+  print "Input file "+file_list+" not found.  Exiting..."
+  sys.exit()
+
+ifile = open( file_list, "r" )
+files = ifile.readlines()
+ifile.close()
+
+save_dir = "/glade/scratch/dbr/old_metgrid"
+mg_data = "/glade/scratch/dbr/wrf/wps/metgrid"
+mg_run = "/glade/user/dbr/wrf/wps/run"
+fn_log = "metgrid.log"
+fn_namelist = "namelist.wps"
+
+xx = file_list.split("_")
+yy = xx[1]
+mm = xx[2]
+ofile = open( mg_data+"/metgrid_script_"+yy+"_"+mm, "w" )
+
+for ff in files:
+  f = ff.rstrip()
+  print f
+  yy = f[11:15]
+  mm = f[16:18]
+  dd = f[19:21]
+  hh = f[22:24]
+  
+  # save the original netcdf file
+#  pdb.set_trace()
+  dir_in = "%s/%s/%s%s%s" % (mg_data, yy, yy, mm, dd)
+  nc_in = "met_em.d02.%s-%s-%s_%s:00:00.nc" % (yy, mm, dd, hh)
+  nc_out = "xx_"+nc_in
+  cmd = "cp -p "+dir_in+"/"+nc_in+" "+save_dir+"/"+nc_out
+  os.system( cmd )
+
+  # save original log and namelist
+  r_dir = "%s/%s/%s%s%s" % (mg_run, yy, yy, mm, dd)
+  os.chdir( r_dir )
+  ofile.write( "cd "+r_dir+"\n" )
+  ofile.write( "./metgrid.exe &\n" )
+
+  # create backup log file only if one does not exist
+  if not os.path.exists( fn_log+"_old" ):
+    cmd = "cp -p "+fn_log+" "+fn_log+"_old"
+    os.system( cmd )
+
+  # create backup namelist file only if one does not exist,
+  # restore backup namelist if it does exist
+  if not os.path.exists( fn_namelist+"_old" ):
+    cmd = "cp -p "+fn_namelist+" "+fn_namelist+"_old"
+    os.system( cmd )
+  else:
+    cmd = "cp -p "+fn_namelist+"_old "+fn_namelist
+    os.system( cmd )
+
+  # edit namelist.wps
+  sedcmd = "sed -e /start_date/s/..:00:00/"+hh+":00:00/2 -e /end_date/s/..:00:00/"+hh+":00:00/2 -e /active_grid/s/\.false\.,$/.true.,/ < "+fn_namelist+" > "+fn_namelist+"_new"
+  os.system( sedcmd )
+
+  # move new namelist to current
+  cmd = "mv "+fn_namelist+"_new "+fn_namelist
+  os.system( cmd )
+
+ofile.write( "wait\n" )
+ofile.close()

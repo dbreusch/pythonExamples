@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+# split WRF job into three new jobs (a,b,c)
+# edit namelist.input and mpi_wrf.pbs
+# arg1 = start year of run
+# arg2 = start month of run
+# ** above refers to spinup day
+# 12/6/15, converted from shell to Python
+
+import pdb, sys, os, math, commands
+import datetime 
+import calendar
+import argparse, glob
+
+# set up arguments
+parser = argparse.ArgumentParser( description = "split WRF into three jobs" )
+parser.add_argument( "yyyymmdd", help="year, month, day of run", nargs=3 )
+parser.add_argument( "-f","--flag", type=int, help="flag to indicate jobname is formatted for 1st of month (defaults to 1)", nargs="?", default="1" )
+parser.add_argument( "-r","--runtime", help="original run time(defaults to 19:12)", nargs="?", default="19:12" )
+
+# parse the command line
+args = parser.parse_args()
+
+y1, mm, dd = map( int, args.yyyymmdd )
+jflag = args.flag
+rtime = args.runtime
+
+dd1 = datetime.timedelta( days=1 )
+if jflag == 1:
+  date_start = datetime.date( y1, mm, dd ) - dd1
+  print "Jobname is formatted for 1st of month"
+else:
+  date_start = datetime.date( y1, mm, dd )
+jpatt = str(y1)+str(mm).zfill(2)+str(dd).zfill(2)
+
+dd32 = datetime.timedelta( days=32 )
+dd10 = datetime.timedelta( days=10 )
+date_end = date_start + dd32
+date_start_a = date_start
+date_end_a = date_start + dd10
+nday_a = date_end_a - date_start_a
+date_start_b = date_end_a
+date_end_b = date_start_b + dd10
+nday_b = date_end_b - date_start_b
+date_start_c = date_end_b
+date_end_c = date_end
+nday_c = date_end_c - date_start_c
+#pdb.set_trace()
+
+print date_start_a, date_end_a
+print date_start_b, date_end_b
+print date_start_c, date_end_c
+
+nf1 = "namelist.input"
+nf2 = nf1+"_save"
+
+# save original namelist
+os.system( "cp "+nf1+" "+nf2 )
+
+# namelist a
+print "namelist.input_a"
+run_hours = str( nday_a.days * 24 )
+syy1 = str(date_start.year)
+syy2 = str(date_start_a.year)
+eyy1 = str(date_end.year)
+eyy2 = str(date_end_a.year)
+smm1 = str(date_start.month).zfill(2)
+smm2 = str(date_start_a.month).zfill(2)
+emm1 = str(date_end.month).zfill(2)
+emm2 = str(date_end_a.month).zfill(2)
+sdd1 = str(date_start.day).zfill(2)
+sdd2 = str(date_start_a.day).zfill(2)
+edd1 = str(date_end.day).zfill(2)
+edd2 = str(date_end_a.day).zfill(2)
+print "run_hours 765 to "+run_hours
+print "Start: "+syy1+"/"+smm1+"/"+sdd1+" to "+syy2+"/"+smm2+"/"+sdd2
+print "End:   "+eyy1+"/"+emm1+"/"+edd1+" to "+eyy2+"/"+emm2+"/"+edd2
+print ""
+cmd = "sed -e /run_hours/s/765/"+run_hours+"/ -e /start_year/s/"+syy1+"/"+syy2+"/g -e /end_year/s/"+eyy1+"/"+eyy2+"/g -e /start_month/s/"+smm1+"/"+smm2+"/g -e /end_month/s/"+emm1+"/"+emm2+"/g -e /start_day/s/"+sdd1+"/"+sdd2+"/g -e /end_day/s/"+edd1+"/"+edd2+"/g -e /restart/s/false/false/ < "+nf1+" > namelist.input_a"
+os.system( cmd )
+
+# namelist b
+print "namelist.input_b"
+run_hours = str( nday_b.days * 24 )
+syy2 = str(date_start_b.year)
+eyy2 = str(date_end_b.year)
+smm2 = str(date_start_b.month).zfill(2)
+emm2 = str(date_end_b.month).zfill(2)
+sdd2 = str(date_start_b.day).zfill(2)
+edd2 = str(date_end_b.day).zfill(2)
+print "run_hours 765 to "+run_hours
+print "Start: "+syy1+"/"+smm1+"/"+sdd1+" to "+syy2+"/"+smm2+"/"+sdd2
+print "End:   "+eyy1+"/"+emm1+"/"+edd1+" to "+eyy2+"/"+emm2+"/"+edd2
+print ""
+cmd = "sed -e /run_hours/s/765/"+run_hours+"/ -e /start_year/s/"+syy1+"/"+syy2+"/g -e /end_year/s/"+eyy1+"/"+eyy2+"/g -e /start_month/s/"+smm1+"/"+smm2+"/g -e /end_month/s/"+emm1+"/"+emm2+"/g -e /start_day/s/"+sdd1+"/"+sdd2+"/g -e /end_day/s/"+edd1+"/"+edd2+"/g -e /restart/s/false/true/ < "+nf1+" > namelist.input_b"
+os.system( cmd )
+
+# namelist c
+print "namelist.input_c"
+run_hours = str( nday_c.days * 24 - 3 )
+syy2 = str(date_start_c.year)
+eyy2 = str(date_end_c.year)
+smm2 = str(date_start_c.month).zfill(2)
+emm2 = str(date_end_c.month).zfill(2)
+sdd2 = str(date_start_c.day).zfill(2)
+edd2 = str(date_end_c.day).zfill(2)
+print "run_hours 765 to "+run_hours
+print "Start: "+syy1+"/"+smm1+"/"+sdd1+" to "+syy2+"/"+smm2+"/"+sdd2
+print "End:   "+eyy1+"/"+emm1+"/"+edd1+" to "+eyy2+"/"+emm2+"/"+edd2
+print ""
+cmd = "sed -e /run_hours/s/765/"+run_hours+"/ -e /start_year/s/"+syy1+"/"+syy2+"/g -e /end_year/s/"+eyy1+"/"+eyy2+"/g -e /start_month/s/"+smm1+"/"+smm2+"/g -e /end_month/s/"+emm1+"/"+emm2+"/g -e /start_day/s/"+sdd1+"/"+sdd2+"/g -e /end_day/s/"+edd1+"/"+edd2+"/g -e /restart/s/false/true/ < "+nf1+" > namelist.input_c"
+os.system( cmd )
+
+print "Jobname pattern "+jpatt
+
+# mpi_wrf a
+print "mpi_wrf.pbs_a"
+ofile = open( "tempfile", "w" )
+cmd = r"sed < mpi_wrf.pbs > mpi_wrf.pbs_a -e s/"+jpatt+"/"+jpatt+"a/ -e s/"+rtime+"/05:00/ -e s/_save/_save_a/ -e '/^mpirun/i \\"
+ofile.write( cmd+"\n" )
+ofile.write("cp namelist.input_a namelist.input'")
+ofile.close()
+os.system( "sh tempfile" )
+
+# mpi_wrf b
+print "mpi_wrf.pbs_b"
+ofile = open( "tempfile", "w" )
+cmd = r"sed < mpi_wrf.pbs > mpi_wrf.pbs_b -e s/"+jpatt+"/"+jpatt+"b/ -e s/"+rtime+"/05:00/ -e s/_save/_save_b/ -e '/^mpirun/i \\"
+ofile.write( cmd+"\n" )
+ofile.write("cp namelist.input_b namelist.input'")
+ofile.close()
+os.system( "sh tempfile" )
+
+# mpi_wrf c
+print "mpi_wrf.pbs_c"
+ofile = open( "tempfile", "w" )
+cmd = r"sed < mpi_wrf.pbs > mpi_wrf.pbs_c -e s/"+jpatt+"/"+jpatt+"c/ -e s/"+rtime+"/05:30/ -e s/_save/_save_c/ -e '/^mpirun/i \\"
+ofile.write( cmd+"\n" )
+ofile.write("cp namelist.input_c namelist.input'")
+ofile.close()
+os.system( "sh tempfile" )
+
+os.unlink( "tempfile" )

@@ -1,0 +1,95 @@
+#!/usr/bin/env python
+# archive_wrf_ccsm:
+# migrate WRF and real output files to hpss.
+# customized for monthly ccsm directories
+# includes support for "postproc" files through arg subdir.
+
+import pdb, sys, os, commands
+from glob import *
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Syntax:  archive_wrf mm dd yy [subdir] [maindir] [period]"
+  print "  mm, dd, yy = month, day, year to start at"
+  print "  subdir = directory under main wrf dir (defaults to run)"
+  print "  maindir = top directory for files (defaults to ccsm)"
+  print "  period = CCSM period (20th.track1, rcp8_5)"
+  sys.exit()
+
+# set version (for output dir)
+version = "v3"
+
+# get command line args
+mm, dd, yy = map(str, sys.argv[1:4])
+mm = sys.argv[1]
+dd = sys.argv[2]
+yy = sys.argv[3]
+if nargin < 5:
+  subdir = "run"
+else:
+  subdir = sys.argv[4]
+if nargin < 6:
+  maindir = "ccsm"
+else:
+  maindir = sys.argv[5]
+if nargin < 7:
+  period = "20th.track1"
+else:
+  period = sys.argv[6]
+
+#pdb.set_trace()
+
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+srcdir = "/glade/scratch/dbr/wrf/"+maindir+"/"+period+"/"+subdir
+if subdir == "run":
+  hpssdir = "/home/dbr/"+maindir+"_"+version+"/wrf/"+period
+  file_patterns = ['wrfout*', 'wrfinput*','wrflowinp*','wrfbdy*','wrfrst*','wrffdda*']
+elif subdir == "postproc":
+  hpssdir = "/home/dbr/"+maindir+"_"+version+"/postproc/"+period
+  file_patterns = ['wrfout*']
+else:
+  print "HPSS subdir "+subdir+" not recognized for output. Exiting..."
+  sys.exit()
+
+# check that top output dir exists on HPSS
+cmd = "hsi ls "+hpssdir
+rc = commands.getoutput( cmd )
+stat = rc.split('\n')[1]
+if "No such file" in stat:
+  print "Creating hpss directory "+hpssdir
+  cmd = 'hsi "mkdir '+hpssdir+'"'
+  os.system( cmd )
+
+# check that year dir exists on HPSS
+odir = hpssdir+"/"+yy
+cmd = "hsi ls "+odir
+rc = commands.getoutput( cmd )
+stat = rc.split('\n')[1]
+if "No such file" in stat:
+  print "Creating hpss directory "+odir
+  cmd = 'hsi "cd '+hpssdir+' ; mkdir '+yy+'"'
+  os.system( cmd )
+
+# check that run dir exists on HPSS
+odir2 = odir+"/"+datestr
+cmd = "hsi ls "+odir2
+rc = commands.getoutput( cmd )
+stat = rc.split('\n')[1]
+if "No such file" in stat:
+  print "Creating hpss directory "+odir2
+  cmd = 'hsi "cd '+odir+' ; mkdir '+datestr+'"'
+  os.system( cmd )
+
+# create HPSS commands for each output dir
+for fp in file_patterns:
+  rundir = srcdir+"/"+yy+"/"+datestr
+  os.chdir( rundir )
+  files = glob( fp )
+  for fn in files:
+    hpss_out = odir2+"/"+fn
+    # HPSS command
+#    cmd = "hsi cput "+rundir+"/"+fn+" : "+hpss_out
+    cmd = "hsi put "+rundir+"/"+fn+" : "+hpss_out
+#    print cmd
+    print fn
+    os.system( cmd )

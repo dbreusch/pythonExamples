@@ -1,0 +1,122 @@
+#!/usr/bin/env python
+# make_ungrib:
+# run ungrib.exe for a given date range.
+
+# 10/21/15, updated for ERAI online under RDA
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os, math, commands
+from datetime import time
+from glob import *
+
+nargin = len(sys.argv)
+if nargin < 6:
+  print "Syntax:  make_ungrib mm dd yy ndays exp model branch"
+  print "  mm, dd, yy = month, day, year to start at"
+  print "  ndays = number of days to process"
+  print "  exp = experiment (gis, ant)"
+  print "  model = model name (optional: erai)"
+  print "  branch = model branch (optional: historical)"
+  sys.exit()
+
+# get command line args
+mm = sys.argv[1]
+dd = sys.argv[2]
+yy = sys.argv[3]
+ndays = sys.argv[4]
+expname = sys.argv[5]
+if expname not in ("gis", "ant"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+if nargin < 8:
+  branch = "historical"
+else:
+  branch = sys.argv[7]
+if nargin < 7:
+  model = "erai"
+else:
+  model = sys.argv[6]
+
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+
+rda_root_dir = "/glade/p/rda/data/ds627.0"
+data_root_dir = "/glade/u/home/dbr/scratch/data/"+model+"/"+branch
+
+pairs = [ ["ei.oper.an.pl","pl","sc"],["ei.oper.an.pl","pl","uv"],["ei.oper.an.sfc","sfc","sc"]]
+#grb_template = "ei.oper.an.%s.regn128%s.%04d%02d%02d%02d.grb"
+grb_template = "ei.oper.an.%s.regn128%s.%04d%02d%02d%02d"
+grb_temp_dir = "grb_temp"
+
+cmd = "setup_wps_dir "+mm+" "+dd+" "+yy+" --ndays "+ndays+" --model "+model+" --branch "+branch+" --exp "+expname+" --wpsstep ungrib"
+os.system( cmd )
+
+wps_root_dir = "/glade/scratch/dbr/wrf/"+expname+"_"+model+"/"+branch+"/wps"
+#ungrib_root_dir = wps_root_dir+"/intermed"
+ungrib_root_dir = "/glade/scratch/dbr/data/"+expname+"_"+model+"/"+branch+"/intermed"
+wps_run_dir = wps_root_dir+"/run/"+str(yy)
+os.chdir( wps_run_dir+"/"+datestr )
+
+# read in timesteps to process
+if not os.path.exists( datestr+"+ts" ):
+  # call timesteps to create time files
+  cmd = "timesteps "+mm+" "+dd+" "+yy+" "+ndays
+  os.system( cmd )
+ifile = open( datestr+"_ts", "r" )
+ts_list = ifile.readlines()
+ifile.close()
+
+# check for grb temp directory, create if missing
+if not os.path.exists( grb_temp_dir ):
+  try:
+    os.makedirs( grb_temp_dir )
+  except OSError:
+    print "Caught makedir of existing dir "+grb_temp_dir
+os.chdir( grb_temp_dir )
+
+# clean up grb temp directory, if needed
+old_files = glob( 'ei.*' )
+for f in old_files:
+  os.unlink( f )
+
+# process time steps and symlink input files to temp dir
+for ts in ts_list:
+  args = ts.split()
+  tyy = int(args[0])
+  tmm = int(args[1])
+  tdd = int(args[2])
+  thh = int(args[3])
+  datestr2 = "%04d%02d%02d" % (tyy, tmm, tdd)
+  datestr3 = "%04d%02d" % (tyy, tmm )
+
+  ungrib_dir = ungrib_root_dir+"/"+str(tyy)+"/"+datestr2
+  if not os.path.exists( ungrib_dir ):
+    os.makedirs( ungrib_dir )
+
+  # clean up any existing work files
+  wkdir = os.getcwd()
+  os.chdir( ungrib_dir )
+  old_files = glob( 'PFILE*' )
+  for f in old_files:
+    os.unlink( f )
+  os.chdir( wkdir )
+
+  for pair in pairs:
+    grb_root_dir = rda_root_dir+"/"+pair[0]
+    grb_name = grb_template % (pair[1], pair[2], tyy, tmm, tdd, thh)
+#    grb_fn = grb_root_dir+"/"+str(tyy)+"/"+datestr2+"/"+grb_name
+    grb_fn = grb_root_dir+"/"+datestr3+"/"+grb_name
+    cmd = "ln -sf "+grb_fn+" "+grb_name+".grb"
+    os.system( cmd )
+
+os.chdir( ".." )
+
+# clean up any existing GRIBFILEs, if needed
+old_files = glob( 'GRIBFILE*' )
+for f in old_files:
+  os.unlink( f )
+
+# link input files to the run dir
+cmd = "./link_grib.csh "+grb_temp_dir+"/*"
+os.system( cmd )
+
+os.system( "ungrib.exe" )

@@ -1,0 +1,162 @@
+#!/usr/bin/env python
+# make_seaice:
+# process sea ice data
+
+import pdb, sys, os, math, glob
+from datetime import time
+from datetime import date
+from datetime import timedelta
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Syntax:  make_seaice mm dd yy [ndays [hemi]]]"
+  print "  mm, dd, yy = month, day, year to start at"
+  print "  ndays = number of days to process (defaults to 1)"
+  print "  hemi = which hemisphere: n, s (defaults to n)"
+  sys.exit()
+
+# get command line args
+mm = sys.argv[1]
+dd = sys.argv[2]
+yy = sys.argv[3]
+if nargin < 5:
+  ndays = "2"
+else:
+  ndays = str( int(sys.argv[4]) + 1)
+if nargin < 6:
+  hemi = "n"
+else:
+  hemi = sys.argv[5]
+
+# define global run parameters
+if hemi == 'n':
+  ni = 304
+  nj = 448
+  truelat1 = 70.
+  xlonc = -45.
+  slat = 33.92
+  slon = 279.26
+  startloc = 'SWCORNER'
+else:
+  ni = 316
+  nj = 332
+  truelat1 = -70.
+  xlonc = 0
+  slat = -41.45
+  slon = 225.
+  startloc = 'SWCORNER'
+
+# define dates, dirs, filenames
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+seaice_root_dir = "/glade/work/dbr/data/seaice"
+data_root_dir = seaice_root_dir+"/bin_"+hemi+"h"
+out_root_dir = seaice_root_dir+"/intermed_"+hemi+"h"
+bt_template = "bt_%4d%02d%02d_*_%1s.bin"
+namelist = "namelist.input"
+
+# call timesteps to create time files
+cmd = "timesteps "+mm+" "+dd+" "+yy+" "+ndays
+os.system( cmd )
+
+# read in start/end dates
+ifile = open( datestr, "r" )
+t_list = ifile.readlines()
+ifile.close()
+args = t_list[0].split()
+syy = int(args[0])
+smm = int(args[1])
+sdd = int(args[2])
+args = t_list[1].split()
+eyy = int(args[0])
+emm = int(args[1])
+edd = int(args[2])
+
+# loop through dates
+sday = date( syy, smm, sdd )
+eday = date( eyy, emm, edd )
+day_inc = timedelta( days=1 )
+while sday < eday:
+  ofile = open( namelist, "w" )
+  print sday.strftime( "%Y %m %d" )
+
+  # run parameters
+  ofile.write( "&rundata\n")
+  ofile.write( "hemi = '"+hemi+"',\n" )
+  ofile.write( "ni = "+str(ni)+",\n" )
+  ofile.write( "nj = "+str(nj)+",\n" )
+  ofile.write( "truelat1 = "+str(truelat1)+",\n" )
+  ofile.write( "xlonc = "+str(xlonc)+",\n" )
+  ofile.write( "startlat = "+str(slat)+",\n" )
+  ofile.write( "startlon = "+str(slon)+",\n" )
+  ofile.write( "startloc = '"+startloc+"',\n" )
+  ofile.write( "/\n" )
+
+  # today's file
+  tt_today = sday.timetuple()
+  patt_today = bt_template % ( tt_today.tm_year, tt_today.tm_mon, tt_today.tm_mday, hemi )
+  fn_today = glob.glob( data_root_dir+"/"+str( tt_today.tm_year )+"/"+patt_today)
+#  if mm == "11":
+#    pdb.set_trace()
+  if len( fn_today ) == 0:
+    print "Looking for "+patt_today+" but did not find. Skipping."
+    sday = sday + day_inc
+    continue
+  basefn = os.path.basename( fn_today[0] )
+  ll = basefn.split('_')
+  fnsensor = ll[2]
+  fnversion = ll[3]
+  ofile.write( "\n&fndata\n")
+  ofile.write( sday.strftime( "fnyy = '%Y'" )+",\n")
+  ofile.write( sday.strftime( "fnmm = '%m'" )+",\n")
+  ofile.write( sday.strftime( "fndd = '%d'" )+",\n")
+  ofile.write( "fnsensor = '"+fnsensor+"',\n" )
+  ofile.write( "fnversion = '"+fnversion+"',\n" )
+
+  # tomorrow's file
+  nday = sday + day_inc
+  tt_next = nday.timetuple()
+  patt_next = bt_template % ( tt_next.tm_year, tt_next.tm_mon, tt_next.tm_mday, hemi )
+  fn_next = glob.glob( data_root_dir+"/"+str( tt_next.tm_year )+"/"+patt_next)
+  if len( fn_next ) == 0:
+    print "Next day binary input file not found.  Skipping."
+    sday = sday + day_inc
+    continue
+  basefn = os.path.basename( fn_next[0] )
+  ll = basefn.split('_')
+  ndsensor = ll[2]
+  ndversion = ll[3]
+  ofile.write( nday.strftime( "ndyy = '%Y'" )+",\n")
+  ofile.write( nday.strftime( "ndmm = '%m'" )+",\n")
+  ofile.write( nday.strftime( "nddd = '%d'" )+",\n")
+  ofile.write( "ndsensor = '"+ndsensor+"',\n" )
+  ofile.write( "ndversion = '"+ndversion+"',\n" )
+  ofile.write( "/\n" )
+
+  data_dir1 = data_root_dir+"/"+str(tt_today.tm_year)
+  data_dir2 = data_root_dir+"/"+str(tt_next.tm_year)
+  datestr_o = "%04d%02d%02d" % (tt_today.tm_year, tt_today.tm_mon, tt_today.tm_mday)
+  out_dir = out_root_dir+"/"+str(tt_today.tm_year)+"/"+datestr_o
+  if not os.path.exists( out_dir ):
+    os.makedirs( out_dir )
+  ofile.write( "\n&dirnames\n")
+  ofile.write( "idir1 = '"+data_dir1+"',\n")
+  ofile.write( "idir2 = '"+data_dir2+"',\n")
+  ofile.write( "odir = '"+out_dir+"',\n")
+  ofile.write( "/\n" )
+  sday = sday + day_inc
+  ofile.close()
+
+  print "Reading data"
+  cmd = "read_data"
+  os.system( cmd )
+
+
+# clean up
+#if os.path.exists( namelist ):
+#  os.unlink( namelist )
+if os.path.exists( datestr ):
+  os.unlink( datestr )
+if os.path.exists( datestr+"_ts" ):
+  os.unlink( datestr+"_ts" )
+if os.path.exists( datestr+"_jobs" ):
+  os.unlink( datestr+"_jobs" )

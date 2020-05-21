@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+# archive non-netCDF files related to real and wrf runs.
+# 03/29/17, dbr, removed hardcoded dependence on home directory name
+# 06/11/12, dbr, modified to handle existing tar-file: added option to
+#                update files if tar-file exists, otherwise overwrite.
+
+# 08/15/12, updated for Janus filesystems
+# 04/16/13, added support for ccsm
+# 02/05/16, made universal, added argparse
+
+import pdb, sys, os, commands, glob, argparse
+
+# set up argument parser
+parser = argparse.ArgumentParser( description = "Archive WRF work files" )
+
+# define arguments
+parser.add_argument( "yyyymmdd", help="year, month, day to archive" )
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-u","--update", help="update/overwrite existing tar-file (default: o)", nargs="?",default="o")
+parser.add_argument( "-v","--version", help="version for output file (default: v1)", nargs="?",default="v1")
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+yyyymmdd = args.yyyymmdd
+diryy = yyyymmdd[0:4]
+dirmm = yyyymmdd[4:6]
+dirdd = yyyymmdd[6:]
+
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+update = args.update
+if update not in ("o", "u"):
+  print "Update arg must be 'o' (overwrite) or 'u' (update)"
+  sys.exit()
+version = args.version
+
+# base directory names
+home = os.path.expanduser("~")
+diri = home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wrf/run"
+diro = home+"/work/wrf/saved_work/"+expname+"_"+model
+if ens > 0:
+  diri += "/"+enss
+  diro += "/"+enss
+diro += "/wrf"
+
+file_patterns = ['wrfout', 'wrfinput','wrflowinp','wrfbdy','wrfrst','wrffdda']
+
+# set up directory/file patterns and pieces
+dir1patt = "%4d"
+dir2patt = "%4d%02d%02d"
+
+#dir1 = dir1patt % diryy
+#dir2 = dir2patt % (diryy, dirmm, dirdd)
+dir1 = diryy
+dir2 = diryy+dirmm+dirdd
+
+idir = dir1+"/"+dir2
+odir = diro+"/"+dir1
+ofn = odir+"/"+dir2+"_wrf_"+version
+tar_fn = ofn+".tar"
+zip_fn = tar_fn+".gz"
+
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+dir1
+
+tempdir = home+"/scratch/tmp"
+tempfn = tempdir+"/"+dir2+"_exclude"
+
+# get list of files from working directory
+os.chdir( diri )
+filelist = glob.glob( idir+"/*" )
+filelist.sort()
+
+# open exclude file
+ofile = open( tempfn, "w" )
+
+# process file list
+for f in filelist:
+  g = f.split('/')
+  if len(g) > 0:
+    fn = g[-1]
+  else:
+    print "Filename split failed"
+    sys.exit()
+  for x in file_patterns:
+    if fn.startswith( x ):
+      ofile.write( f+"\n" )
+ofile.close()
+
+#pdb.set_trace()
+# determine if creating or updating the tar file
+if update == "o":
+  tarflag = "-c"
+elif update == "u":
+  if not os.path.exists( zip_fn ):  # file does not exist, create from scratch
+    tarflag = "-c"
+  else:
+    # unzip existing file
+    cmd = "gunzip -c "+zip_fn+" > "+tar_fn
+    os.system( cmd )
+    tarflag = "-u"
+else:
+  print "update flag value "+update+" not recognized.  Exiting..."
+  sys.exit()
+
+# run the tar command
+cmd = "tar "+tarflag+" -f "+tar_fn+" -X "+tempfn+" "+idir
+os.system( cmd )
+
+# gzip the tar file
+print "Files saved to "+zip_fn
+cmd = "gzip -f "+tar_fn
+os.system( cmd )
+
+# clean up
+if os.path.exists( tempfn ):
+  os.unlink( tempfn )
+if os.path.exists( tar_fn ):
+  os.unlink( tar_fn )

@@ -1,0 +1,86 @@
+#!/usr/bin/env python
+# run_add_up_rad:
+# create shell script to run the add upward radiation vars script
+
+# 08/15/12, updated for Janus filesystems
+
+import pdb, sys, os
+#  pdb.set_trace()
+
+nargin = len(sys.argv)
+if nargin < 5:
+  print "Syntax:  run_add_up_rad script fnlist1 fnlist2 outvar [prefix] [in_dir]"
+  print "  script = script to run on each file (add_up_rad)"
+  print "  fnlist1 = file with list of down_rad files to process"
+  print "  fnlist2 = file with list of net_rad files to process"
+  print "  outvar = output variable name (also part of output file name)"
+  print "  prefix = prefix for output script file (default add_rad)"
+  print "  in_dir = source directory for input files [defaults to erai sub_var dir]"
+#  print "          names are relative to /Volumes/linux_backup/antmelt_work/erai"
+  print "          names are relative to /lustre/janus_scratch/dbr/data/erai/fc_monthly unless"
+  print "          they start with a /"
+  sys.exit()
+
+# get command line args
+script_cmd = sys.argv[1]
+fnlist1 = sys.argv[2]
+fnlist2 = sys.argv[3]
+outvar = sys.argv[4]
+if nargin < 6:
+  prefix = "add_rad"
+else:
+  prefix = sys.argv[5]
+if nargin < 7:
+  in_dir = "sub_var"
+else:
+  in_dir = sys.argv[6]
+
+jname = prefix
+#root_dir = "/Volumes/linux_backup/antmelt_work/erai/"+in_dir
+root_dir = "/lustre/janus_scratch/dbr/data/erai/fc_monthly"
+
+# read in complete list of files to process
+# fnlist 1
+if not os.path.exists( fnlist1 ):
+  print "File "+fnlist1+" not found. Exiting..."
+  sys.exit()
+ifile = open( fnlist1, "r" )
+file_list1 = ifile.readlines()
+ifile.close()
+file_list1.reverse()
+
+# fnlist 2
+if not os.path.exists( fnlist2 ):
+  print "File "+fnlist2+" not found. Exiting..."
+  sys.exit()
+ifile = open( fnlist2, "r" )
+file_list2 = ifile.readlines()
+ifile.close()
+file_list2.reverse()
+
+file_list = zip( file_list1, file_list2 )
+flen = len(file_list)
+
+# start batch job creation
+jnum = 1
+sh_cmds = "%s_%02d" % (jname, jnum)
+
+# process some file names
+ofile = open( sh_cmds, "w" )
+ofile.write( "#!/bin/csh\n" )
+fcnt = 1
+
+while flen > 0:
+  arg = file_list.pop()
+  fn1 = arg[0].rstrip()
+  fn2 = arg[1].rstrip()
+  flen = len(file_list)
+
+  ofile.write( script_cmd+" " )
+  ofile.write( fn1+" " )
+  ofile.write( fn2+" " )
+  ofile.write( outvar+" " )
+  ofile.write( root_dir )
+  ofile.write( "\n" )
+
+ofile.close()

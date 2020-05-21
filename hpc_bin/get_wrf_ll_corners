@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+import argparse
+import sys
+import pdb
+import Nio
+
+inputDir = "/glade/u/home/dbr/scratch/amps/d02/wrf_30/subset/d02_Ross_Island_10x10"
+inFile   = "wrfout_d02_2017010100.nc"
+
+fid = Nio.open_file(inputDir+"/"+inFile)
+
+varName = "XLONG"
+X = fid.variables[varName][0,:,:]
+ni, nj = X.shape
+lonList = [ X[0,0], X[ni-1,0], X[ni-1,nj-1], X[0,nj-1] ]
+
+varName = "XLAT"
+X = fid.variables[varName][0,:,:]
+ni, nj = X.shape
+latList = [ X[0,0], X[ni-1,0], X[ni-1,nj-1], X[0,nj-1] ]
+
+for i,j in zip( lonList, latList ):
+  s = "%6.1f %5.1f" % (i,j)
+  print(s)
+
+#pdb.set_trace()

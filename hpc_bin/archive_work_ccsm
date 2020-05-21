@@ -1,0 +1,115 @@
+#!/usr/bin/env python
+# archive non-netCDF files related to real and wrf runs.
+# 06/11/12, dbr, modified to handle existing tar-file: added option to
+#                update files if tar-file exists, otherwise overwrite.
+
+# 08/15/12, updated for Janus filesystems
+# 04/16/13, added support for ccsm
+
+import pdb, sys, os, commands, glob
+
+nargin = len(sys.argv)
+if nargin < 4:
+  print "Usage: archive_work_ccsm diryy dirmm dirdd [update] [period]"
+  print "  diryy, dirmm, dirdd = year, month, day of dir to process"
+  print "  update = if output tar-file exists, update (u) or overwrite (o, default)"
+  print "  period = CCSM period (20th.track1, rcp8_5)"
+  sys.exit()
+
+# get directory date info
+diryy, dirmm, dirdd = map(int, sys.argv[1:4])
+
+# get update/overwrite flag
+if nargin < 5:
+  update = "o"
+else:
+  update = sys.argv[4]
+if nargin < 6:
+  period = "20th.track1"
+else:
+  period = sys.argv[5]
+
+# output version
+version = "v3"
+
+# base directory names
+root_dirs = "/glade/scratch/dbr/wrf/ccsm/"+period
+root_diru = "/glade/p/work/dbr/wrf"
+in_dir = root_dirs+"/run"
+out_dir = root_diru+"/saved_work_ccsm"
+
+file_patterns = ['wrfout', 'wrfinput','wrflowinp','wrfbdy','wrfrst','wrffdda']
+
+# set up directory/file patterns and pieces
+dir1patt = "%4d"
+dir2patt = "%4d%02d%02d"
+
+dir1 = dir1patt % diryy
+dir2 = dir2patt % (diryy, dirmm, dirdd)
+
+#idir = in_dir+"/"+dir1+"/"+dir2
+idir = dir1+"/"+dir2
+odir = out_dir+"/"+dir1
+ofn = odir+"/"+dir2+"_"+version
+tar_fn = ofn+".tar"
+zip_fn = tar_fn+".gz"
+
+if not os.path.exists( odir ):
+  try:
+    os.makedirs( odir )
+  except OSError:
+    print "Caught makedir of existing dir "+dir1
+
+tempdir = "/glade/scratch/dbr/tmp"
+tempfn = tempdir+"/"+dir2+"_exclude"
+
+# get list of files from working directory
+os.chdir( in_dir )
+filelist = glob.glob( idir+"/*" )
+filelist.sort()
+
+# open exclude file
+ofile = open( tempfn, "w" )
+
+# process file list
+for f in filelist:
+  g = f.split('/')
+  if len(g) > 0:
+    fn = g[-1]
+  else:
+    print "Filename split failed"
+    sys.exit()
+  for x in file_patterns:
+    if fn.startswith( x ):
+      ofile.write( f+"\n" )
+ofile.close()
+
+#pdb.set_trace()
+# determine if creating or updating the tar file
+if update == "o":
+  tarflag = "-c"
+elif update == "u":
+  if not os.path.exists( zip_fn ):  # file does not exist, create from scratch
+    tarflag = "-c"
+  else:
+    # unzip existing file
+    cmd = "gunzip -c "+zip_fn+" > "+tar_fn
+    os.system( cmd )
+    tarflag = "-u"
+else:
+  print "update flag value "+update+" not recognized.  Exiting..."
+  sys.exit()
+
+# run the tar command
+cmd = "tar "+tarflag+" -f "+tar_fn+" -X "+tempfn+" "+idir
+os.system( cmd )
+
+# gzip the tar file
+print "Files saved to "+zip_fn
+cmd = "gzip -f "+tar_fn
+os.system( cmd )
+
+# clean up
+os.unlink( tempfn )
+if os.path.exists( tar_fn ):
+  os.unlink( tar_fn )

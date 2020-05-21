@@ -1,0 +1,180 @@
+#!/usr/bin/env python
+# hpss_erai:
+# create jobs to retrieve ERA-Interim data from HPSS for a given date range.
+# can create an LSF batch job or an interactive shell script.
+#
+# Scripts and messages go to current directory
+# OLD: LSF/shell script files go to /glade/home/dbr/wrf/hpss_in
+# OLD: Job messages (i.e., *out, *.err) go to /glade/home/dbr/wrf/hpss_out
+#
+# LSF jobs submitted to job group /ptmp/dbr/hpsserai
+
+import pdb, sys, os, math, commands
+from datetime import time
+
+nargin = len(sys.argv)
+if nargin < 3:
+  print "Syntax:  hpss_erai mm dd yy [ndays] [jtype] [submit]"
+  print "  mm, dd, yy = month, day, year to start at"
+  print "  ndays = number of days to process (defaults to 1)"
+  print "  jtype = (b)atch or (i)nteractive (defaults to b)"
+  print "  submit = 'y' to automatically submit batch job"
+  sys.exit()
+
+# get command line args
+mm = sys.argv[1]
+dd = sys.argv[2]
+yy = sys.argv[3]
+if nargin < 5:
+  ndays = "1"
+else:
+  ndays = sys.argv[4]
+#  ndays = str( int( ndays ) - 1 )
+if nargin < 6:
+  jtype = "b"
+else:
+  jtype = sys.argv[5]
+if nargin < 7:
+  submit = "n"
+else:
+  submit = sys.argv[6]
+
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+
+# LSF info
+jname = "hpss"
+queue = "share"
+jobgroup = "/ptmp/dbr/hpsserai"
+joblim = 4
+
+# runtime dirs
+scr_dir = os.getcwd()
+cust_dir = "/glade/home/dbr/wrf/src/custom"
+user_dir = "/glade/scratch/dbr/data/erai/grb"
+
+# filename patterns
+dss_prefix = "/DSS/DS627.0/ei.oper.an.%s/%04d%02d"
+dss_name = "ei.oper.an.%s.regn128%s.%04d%02d%02d%02d"
+
+# filename "wild cards"
+pairs = [ ["pl","sc"],["pl","uv"],["sfc","sc"]]
+
+# calculate estimated wallclock time
+#nd = int( ndays ) + 1
+#minperday = 24
+#minperjob = minperday * nd
+#wc_hh = int( math.floor( minperjob / 60 ) )
+#wc_mm = minperjob % 60
+#wc_t = time( wc_hh, wc_mm )
+#wc_time = wc_t.strftime( "%H:%M")
+wc_time = "07:00"
+
+# call timesteps to create time files in current dir
+os.chdir( scr_dir )
+cmd = "timesteps "+mm+" "+dd+" "+yy+" "+ndays
+os.system( cmd )
+
+lsf_fn_cmds = scr_dir+"/lsf_"+jname+datestr+"_mid"
+if jtype == "b":
+  # create lsf job filename
+  lsf_fn_pro = scr_dir+"/lsf_"+jname+datestr+"_pro"
+  lsf_fn_epi = scr_dir+"/lsf_"+jname+datestr+"_epi"
+  fn_job = scr_dir+"/lsf_"+jname+datestr
+else:
+  fn_job = scr_dir+"/batch_"+jname+datestr
+
+if jtype == "b":
+  # create (edit) lsf_prolog
+  cmd = "sed s/DATESTR/"+datestr+"/g < "+cust_dir+"/lsf_prolog | sed s/CLOCK/"+wc_time+"/g | sed s/QUEUE/"+queue+"/g | sed s/BASE/"+jname+"/g > "+lsf_fn_pro
+  os.system( cmd )
+
+  # create (copy) lsf_epilog
+  cmd = "cp "+cust_dir+"/lsf_epilog "+lsf_fn_epi
+  os.system( cmd )
+
+# read in timesteps to process
+ifile = open( scr_dir+"/"+datestr+"_ts", "r" )
+ts_list = ifile.readlines()
+ifile.close()
+
+# process time steps and create lsf commands
+ofile = open( lsf_fn_cmds, "w" )
+if jtype == "i":
+  ofile.write( "#!/bin/csh\n\n" )
+
+#pdb.set_trace()
+fcnt = 0
+for ts in ts_list:
+  args = ts.split()
+  tyy = int(args[0])
+  tmm = int(args[1])
+  tdd = int(args[2])
+  thh = int(args[3])
+  datestr2 = "%04d%02d%02d" % (tyy, tmm, tdd)
+
+  # make output directory (if necessary)
+  grb_dir = user_dir+"/"+str(tyy)+"/"+datestr2
+  if not os.path.exists( grb_dir ):
+    os.makedirs( grb_dir )
+
+  # create HPSS and output filenames
+  for pair in pairs:
+    a = dss_prefix % (pair[0], tyy, tmm)
+    b = dss_name % (pair[0], pair[1], tyy, tmm, tdd, thh)
+    dss_fn = a+"/"+b
+    grb_fn = grb_dir+"/"+b+".grb"
+    if os.path.exists( grb_fn ):
+      print "Skipping "+b+", file exists"
+    else:
+      # check that dir exists in the script
+      ofile.write( "if (! -d "+grb_dir+" ) mkdir -p "+grb_dir+"\n" )
+
+      # HPSS command
+      cmd = "hsi cget "+grb_fn+" : "+dss_fn
+      print b
+      ofile.write( cmd+"\n" )
+      fcnt += 1
+
+# following disabled 2/20/12
+#odir = os.path.normpath( scr_dir+"/../hpss_out" )
+#ostr = "Moving job output to %s" % odir
+#ofile.write( '\necho '+ostr+'\n' )
+#cmd = "mv hpss_"+datestr+"* "+odir
+#ofile.write( cmd+"\n" )
+
+ofile.close()
+
+# put pieces together
+if fcnt>0:
+  if jtype == "b":
+    cmd = "cat "+lsf_fn_pro+" "+lsf_fn_cmds+" "+lsf_fn_epi+" > "+fn_job
+    os.system( cmd )
+    print "LSF job in file "+fn_job
+    if submit == "y":
+      cmd = "bjgroup -s "+jobgroup
+      res = commands.getoutput( cmd )
+      if res.startswith("No job group"):
+        cmd = "bgadd -L "+str(joblim)+" "+jobgroup
+        os.system( cmd )
+      cmd = "bsub -g "+jobgroup+" < "+fn_job
+      os.system( cmd )
+  else:
+    cmd = "mv "+lsf_fn_cmds+" "+fn_job
+    os.system( cmd )
+    cmd = "chmod +x "+fn_job
+    os.system( cmd )
+    print "Shell script in file "+fn_job
+else:
+  cmd = "cat "+lsf_fn_pro+"  > "+fn_job
+  os.system( cmd )
+  cmd = "echo echo No files to recall >> "+fn_job
+  os.system( cmd )
+  print "No files to recall, skipping job"
+
+# clean up
+if jtype == "b":
+  os.unlink( lsf_fn_pro )
+  os.unlink( lsf_fn_cmds )
+  os.unlink( lsf_fn_epi )
+os.unlink( scr_dir+"/"+datestr )
+os.unlink( scr_dir+"/"+datestr+"_ts" )

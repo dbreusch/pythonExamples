@@ -1,0 +1,93 @@
+#!/usr/bin/env python
+# archive_wrf:
+# migrate WRF and real output files to hpss.
+# includes support for "postproc" files through arg subdir.
+# 03/29/17, dbr, removed hardcoded dependence on home directory name
+
+import pdb, sys, os, commands, argparse
+from glob import *
+
+#pdb.set_trace()
+
+# set up argument parser
+parser = argparse.ArgumentParser( description = "Archive WRF output files" )
+
+# define arguments
+parser.add_argument( "yyyymmdd", help="year, month, day to archive" )
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-d","--subdir", help="archive sub-directory", nargs="?", default="run")
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+yyyymmdd = args.yyyymmdd
+yy = yyyymmdd[0:4]
+mm = yyyymmdd[4:6]
+dd = yyyymmdd[6:]
+
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+subdir = args.subdir
+
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+home = os.path.expanduser("~")
+cust_dir = home+"/wrf/src/custom"
+#if subdir == "postproc":
+#  srcdir = home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/"+subdir
+#else:
+#  srcdir = home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wrf/"+subdir
+srcdir = home+"/scratch/wrf/"+expname+"_"+model+"/"+branch+"/wrf/"+subdir
+if subdir == "run":
+  hpssdir = "/home/dbr/wrfout/"+expname+"_"+model+"/"+branch
+  file_patterns = ['wrfout*', 'wrfinput*','wrflowinp*','wrfbdy*']
+elif subdir == "postproc":
+  hpssdir = "/home/dbr/postproc/"+expname+"_"+model+"/"+branch
+  file_patterns = ['wrfout*']
+else:
+  print "HPSS subdir "+subdir+" not recognized for output. Exiting..."
+  sys.exit()
+if ens > 0:
+  srcdir += "/"+enss
+  hpssdir += "/"+enss
+
+# create the output dir on hpss.  this is a no-cost operation: if it's
+# there, no error messages!
+odir = hpssdir+"/"+yy+"/"+datestr
+cmd = 'hsi "mkdir -p '+odir+'"'
+os.system( cmd )
+
+# create HPSS commands for each output dir
+for fp in file_patterns:
+  rundir = srcdir+"/"+yy+"/"+datestr
+  if not os.path.exists( rundir):
+    print "Directory not found: "+rundir
+    sys.exit()
+  os.chdir( rundir )
+  files = sorted( glob( fp ) )
+  for fn in files:
+    hpss_out = odir+"/"+fn
+    # HPSS command
+#    cmd = "hsi cput "+rundir+"/"+fn+" : "+hpss_out
+    cmd = "hsi put -p "+rundir+"/"+fn+" : "+hpss_out
+#    print cmd
+    print fn
+    os.system( cmd )

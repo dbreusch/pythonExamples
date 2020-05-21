@@ -1,0 +1,89 @@
+#!/usr/bin/env python
+# metgrid_to_daily:
+# move metgrid files into daily directories
+
+import pdb, sys, os, math, commands
+from datetime import time
+import argparse, glob
+
+# set up arguments
+parser = argparse.ArgumentParser( description = "move metgrid files into daily directories" )
+parser.add_argument( "mmddyy", help="month, day, year to start at", nargs=3 )
+parser.add_argument( "-n","--ndays", help="number of days to process (defaults to 1)", nargs="?", default="1" )
+group = parser.add_mutually_exclusive_group()
+group.add_argument( "-c","--ccsm", help="input data are from ccsm", action="store_true" )
+parser.add_argument( "-b","--branch", help="ccsm model branch(default: 20th.track1)", default="20th.track1", choices=["20th.track1","rcp8_5"], nargs="?" )
+group.add_argument( "-e","--erai", help="input data are from erai (default)", action="store_true" )
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+mm, dd, yy = map( str, args.mmddyy )
+ndays = args.ndays
+ccsm = args.ccsm
+branch = args.branch
+erai = args.erai
+if not ccsm and not erai:
+  erai = True
+
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+if erai:
+  wrf_root_dir = "/glade/scratch/dbr/wrf"
+if ccsm:
+  wrf_root_dir = "/glade/scratch/dbr/wrf/ccsm/"+branch
+wps_root_dir = wrf_root_dir+"/wps"
+metgrid_root_dir = wps_root_dir+"/metgrid"
+
+wps_run_dir = wps_root_dir+"/run/"+str(yy)+"/"+datestr
+if not os.path.exists( wps_run_dir ):
+  try:
+    os.makedirs( wps_run_dir )
+  except OSError:
+    print "Caught makedir of existing dir "+wps_run_dir
+os.chdir( wps_run_dir )
+
+# call timesteps to create time files
+cmd = "timesteps "+mm+" "+dd+" "+yy+" "+ndays
+os.system( cmd )
+
+# read in timesteps to process
+ifile = open( datestr+"_ts", "r" )
+ts_list = ifile.readlines()
+ifile.close()
+
+# check that output directory exists for each timestep, create if it doesn't
+for ts in ts_list:
+  args = ts.split()
+  tyy = int(args[0])
+  tmm = int(args[1])
+  tdd = int(args[2])
+  datestr2 = "%04d%02d%02d" % (tyy, tmm, tdd)
+
+  metgrid_dir = metgrid_root_dir+"/"+str(tyy)+"/"+datestr2
+  if not os.path.exists( metgrid_dir ):
+    try:
+      os.makedirs( metgrid_dir )
+    except OSError:
+      print "Caught makedir of existing dir "+metgrid_dir
+
+#pdb.set_trace()
+# move files into daily directories since metgrid doesn't do that
+cnt = 0
+for ts in ts_list:
+  args = ts.split()
+  tyy, tmm, tdd, thh = map( int, args )
+  datestr2 = "%04d%02d%02d" % (tyy, tmm, tdd)
+  if cnt == 0:
+    metgrid_dir = metgrid_root_dir+"/"+str(tyy)+"/"+datestr2
+    os.chdir( metgrid_dir )
+  if cnt > 3:  # skip first day
+    if thh == 0: # only need first time step per day
+      metfn = "met_em.d0?.%04d-%02d-%02d_*.nc"
+      metpatt = metfn % ( tyy, tmm, tdd )
+      ll = glob.glob( metpatt )
+      for ff in ll:
+        cmd = "mv "+ff+" ../../"+str(tyy)+"/"+datestr2
+        print cmd
+        os.system( cmd )
+  cnt += 1

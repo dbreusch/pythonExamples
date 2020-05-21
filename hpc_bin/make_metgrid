@@ -1,0 +1,145 @@
+#!/usr/bin/env python
+# make_metgrid:
+# run metgrid.exe for a given date range.
+
+# 12/4/15, added ensemble support
+# 11/11/15, updates for yellowstone and gismelt pilot
+# 3/14/13, converted to argparse for command line processing
+
+import pdb, sys, os, math, commands
+from datetime import time
+import argparse, glob
+
+# set up arguments
+parser = argparse.ArgumentParser( description = "run metgrid.exe for a given date range" )
+parser.add_argument( "mmddyy", help="month, day, year to start at", nargs=3 )
+parser.add_argument( "-n","--ndays", help="number of days to process (defaults to 1)", nargs="?", default="1" )
+parser.add_argument( "-r","--recovery", help="this is a recovery job", action="store_true" )
+parser.add_argument( "-m","--model", help="model name (default: erai)", nargs="?", default="erai" )
+parser.add_argument( "-b","--branch", help="model branch (default: historical)", default="historical", nargs="?" )
+parser.add_argument( "-e","--exp", help="experiment (default: gis)", nargs="?", default="gis")
+parser.add_argument( "-E","--ensemble", help="ensemble (default: 0, no ensemble)", type=int, nargs="?",default=0)
+parser.add_argument( "-v","--verbose", help="provide some debug output", action="store_true")
+parser.add_argument( "-d","--debug", help="enable pdb", action="store_true")
+
+#group = parser.add_mutually_exclusive_group()
+#group.add_argument( "-c","--ccsm", help="input data are from ccsm", action="store_true" )
+#parser.add_argument( "-b","--branch", help="ccsm model branch(default: 20th.track1)", default="20th.track1", choices=["20th.track1","rcp8_5","rcp85"], nargs="?" )
+#group.add_argument( "-e","--erai", help="input data are from erai (default)", action="store_true" )
+
+# parse the command line
+args = parser.parse_args()
+
+# assign args to variables
+debug = args.debug
+if debug:
+  pdb.set_trace()
+
+mm, dd, yy = map( str, args.mmddyy )
+ndays = args.ndays
+recovery = args.recovery
+model = args.model
+if model not in ("erai", "ccsm4", "cesmle", "cesmlw"):
+  print "Model "+model+" not recognized"
+  sys.exit()
+expname = args.exp
+if expname not in ("ant", "gis"):
+  print "Experiment name "+expname+" not recognized"
+  sys.exit()
+ens = args.ensemble
+if ens < 0 or ens > 35:
+  print "Ensemble must be between 0 and 35"
+  sys.exit()
+enss = "%03d" % ens
+branch = args.branch
+if branch not in ("historical", "20th.track1", "rcp8_5", "rcp85", "1pt5degC"):
+  print "Branch "+branch+" not recognized"
+  sys.exit()
+verbose = args.verbose
+
+if verbose:
+  print "mm,dd,yy="+mm+","+dd+","+yy
+  print "ndays="+ndays
+  if recovery:
+    print "Recovery"
+  else:
+    print "Normal"
+  print "Model="+model.upper()
+  print "Branch="+branch
+  print "Experiment="+expname
+  print "Ensemble="+enss
+
+datestr = "%04d%02d%02d" % (int(yy), int(mm), int(dd))
+
+# key directories
+wrf_root_dir = "/glade/u/home/dbr/scratch/wrf/"+expname+"_"+model+"/"+branch
+wps_root_dir = wrf_root_dir+"/wps"
+if ens > 0:
+  metgrid_root_dir = wps_root_dir+"/metgrid/"+enss
+  run_root_dir = wps_root_dir+"/run/"+enss
+else:
+  metgrid_root_dir = wps_root_dir+"/metgrid"
+  run_root_dir = wps_root_dir+"/run/"
+run_wps_dir = run_root_dir+"/"+str(yy)+"/"+datestr
+
+wrf_home_dir = "/glade/u/home/dbr/wrf/"+expname+"_"+model+"/src"
+cust_dir = wrf_home_dir+"/custom"
+
+cmd = "setup_wps_dir "+mm+" "+dd+" "+yy+" --ndays "+ndays+" --model "+model+" --branch "+branch+" --exp "+expname+" --ens "+str(ens)+" --wpsstep metgrid"
+if recovery:
+  cmd = cmd+" --recovery"
+os.system( cmd )
+
+if not os.path.exists( run_wps_dir ):
+  try:
+    os.makedirs( run_wps_dir )
+  except OSError:
+    print "Caught makedir of existing dir "+run_wps_dir
+os.chdir( run_wps_dir )
+
+# call timesteps to create time files
+cmd = "timesteps "+mm+" "+dd+" "+yy+" "+ndays
+os.system( cmd )
+
+# read in timesteps to process
+ifile = open( datestr+"_ts", "r" )
+ts_list = ifile.readlines()
+ifile.close()
+
+# check that output directory exists for each timestep, create if it doesn't
+for ts in ts_list:
+  args = ts.split()
+  tyy = int(args[0])
+  tmm = int(args[1])
+  tdd = int(args[2])
+  datestr2 = "%04d%02d%02d" % (tyy, tmm, tdd)
+
+  metgrid_dir = metgrid_root_dir+"/"+str(tyy)+"/"+datestr2
+  if not os.path.exists( metgrid_dir ):
+    try:
+      os.makedirs( metgrid_dir )
+    except OSError:
+      print "Caught makedir of existing dir "+metgrid_dir
+
+os.system( "metgrid.exe" )
+
+# move files into daily directories since metgrid doesn't do that
+cnt = 0
+for ts in ts_list:
+  args = ts.split()
+  tyy, tmm, tdd, thh = map( int, args )
+  datestr2 = "%04d%02d%02d" % (tyy, tmm, tdd)
+  if cnt == 0:
+    metgrid_dir = metgrid_root_dir+"/"+str(tyy)+"/"+datestr2
+    os.chdir( metgrid_dir )
+  if cnt > 3:  # skip first day
+    if thh == 0: # only need first time step per day
+      metfn = "met_em.d0?.%04d-%02d-%02d_*.nc"
+      metpatt = metfn % ( tyy, tmm, tdd )
+      ll = glob.glob( metpatt )
+      for ff in ll:
+#        cmd = "mv "+ff+" ../../"+str(tyy)+"/"+datestr2
+        cmd = "mv "+ff+" "+metgrid_root_dir+"/"+str(tyy)+"/"+datestr2
+        print cmd
+        os.system( cmd )
+  cnt += 1
