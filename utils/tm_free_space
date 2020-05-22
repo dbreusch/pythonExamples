@@ -1,0 +1,96 @@
+#!/usr/bin/env python
+# tm_free_space
+# Delete old Time Machine backups as needed to meet a desired available
+# space amount on the Time Machine volume.
+
+import pdb, argparse, subprocess
+from datetime import datetime
+
+# -----------------------------------------------------------------
+# Function:
+# return current time as formatted string
+# -----------------------------------------------------------------
+def formatTime():
+  ct = datetime.now().strftime("%H:%M:%S")
+  return ct
+
+# -----------------------------------------------------------------
+# Function:
+# get the Time Machine volume name (tmutil)
+# -----------------------------------------------------------------
+def getVolumeName():
+  cmd = "tmutil destinationinfo"
+  cmdOutput = subprocess.check_output( cmd, shell=True ).decode("utf-8")
+  tmOutput = cmdOutput.split(' ')
+  res = [i for i in tmOutput if "Volumes" in i]
+  tmVolume = res[0].split('\n')[0]
+  return tmVolume
+
+# -----------------------------------------------------------------
+# Function:
+# get the available space on the Time Machine volume (df)
+# -----------------------------------------------------------------
+def getCurrSpace( tmVolume ):
+  cmd = "gdf -B MB "+tmVolume
+  cmdOutput = subprocess.check_output( cmd , shell=True ).decode("utf-8")
+  dfOutput = cmdOutput.split(' ')
+  res = [i for i in dfOutput if "MB" in i[-2:]]
+  currAvail = float(res[-1][:-2])/1000
+  return currAvail
+
+# -----------------------------------------------------------------
+# Function:
+# get the filename of the oldest Time Machine backup (tmutil)
+# -----------------------------------------------------------------
+def getOldestBackup():
+  cmd = "tmutil listbackups"
+  cmdOutput = subprocess.check_output( cmd , shell=True ).decode("utf-8")
+  tmOutput = cmdOutput.split('\n')
+  oldestBackup = tmOutput[0]
+  return oldestBackup
+
+# -----------------------------------------------------------------
+# Function:
+# delete the oldest Time Machine backup (tmutil)
+# -----------------------------------------------------------------
+def deleteBackup( ifn ):
+  cmd = "sudo tmutil delete "+ifn
+  cmdOutput = subprocess.check_output( cmd , shell=True ).decode("utf-8")
+  tmOutput = cmdOutput.split('\n')
+  return tmOutput
+
+# -----------------------------------------------------------------
+# process the command line argument
+# -----------------------------------------------------------------
+parser = argparse.ArgumentParser( description = "free up space on TM volume" )
+parser.add_argument("-a","--avail",help="desired amount available", nargs="?")
+args = parser.parse_args() # parse the command line
+tgtAvail = int(args.avail) # get target free space threshold
+
+# -----------------------------------------------------------------
+# get Time Machine volume name
+# -----------------------------------------------------------------
+tmVolume = getVolumeName()
+print(tmVolume)
+
+# -----------------------------------------------------------------
+# loop to delete oldest backups until target free space is reached
+# -----------------------------------------------------------------
+#pdb.set_trace()
+while True:
+  # get available space
+  currAvail = getCurrSpace( tmVolume )
+  currStr = "%.1f" % currAvail
+  if currAvail >= tgtAvail:
+    print(formatTime()+" Current available space ("+currStr+" G) >= target ("+str(tgtAvail)+" G)")
+    break
+  else:
+    print(formatTime()+" Current available space ("+currStr+" G) < target ("+str(tgtAvail)+" G)")
+    # get oldest backup filename
+    oldestBackup = getOldestBackup()
+    backupDate = oldestBackup.split('/')[-1]
+
+    # delete oldest backup
+    print(formatTime()+" ...deleting "+backupDate)
+    res = deleteBackup( oldestBackup )
+    print(formatTime()+"    "+res[-2].split(' ')[-1]+" deleted")
