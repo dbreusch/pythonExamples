@@ -1,4 +1,4 @@
-# Jupyter notebookx
+# Jupyter notebooks
 A collection of Jupiter notebooks from my research on Greenland ice sheet melting.
 
 Be aware that you will NOT be able to run these yourselves with the various input datasets.
